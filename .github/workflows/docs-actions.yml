@@ -13,13 +13,13 @@ jobs:
       uses: lycheeverse/lychee-action@v1.0.8
       with:
         args: --verbose --no-progress **/*.md
-      env:
-        GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+#       env:
+#         GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
 
-    - name: Create Issue From File
-      uses: peter-evans/create-issue-from-file@v3
-      with:
-        title: Link Checker Report
-        content-filepath: ./lychee/out.md
-        labels: report, automated issue
+#     - name: Create Issue From File
+#       uses: peter-evans/create-issue-from-file@v3
+#       with:
+#         title: Link Checker Report
+#         content-filepath: ./lychee/out.md
+#         labels: report, automated issue
 
