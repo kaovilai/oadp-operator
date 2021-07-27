@@ -7,7 +7,7 @@ on:
     - '**/**.md'
     - '.github/workflows/docs-actions.yml' #check changes to this action
     paths-ignore:
-    - 'vendor/**'
+    - 'vendor/**' #don't check vendor docs
     
 jobs:
   link-checker:
