@@ -8,7 +8,7 @@ on:
     - '.github/workflows/docs-actions.yml' #check changes to this action
     paths-ignore:
     - 'vendor/**' #don't check vendor docs
-    
+    #appears workflow check doesn't work or get ignored.
 jobs:
   link-checker:
     runs-on: ubuntu-latest
