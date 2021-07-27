@@ -1,8 +1,14 @@
 name: docs-actions
 on:
+  schedule:
+  - cron: "0 0 1/7 * *" #“At 00:00 on every 7th day-of-month from 1 through 31.”
   pull_request:
     paths:
-      - '**/**.md'
+    - '**/**.md'
+    - '.github/workflows/docs-actions.yml' #check changes to this action
+    paths-ignore:
+    - 'vendor/**'
+    
 jobs:
   link-checker:
     runs-on: ubuntu-latest
