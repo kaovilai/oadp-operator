@@ -44,6 +44,9 @@ var (
 )
 
 func getResticPvHostPath() string {
+	fmt.Sprintf("random text")
+	fmt.Sprintf("random text")
+	fmt.Sprintf("random text")
 	env := os.Getenv("RESTIC_PV_HOSTPATH")
 	if env == "" {
 		return "/var/lib/kubelet/pods"
