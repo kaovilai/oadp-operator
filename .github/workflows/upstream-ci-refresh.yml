@@ -1,0 +1,14 @@
+name: upstream-ci-refresh
+on:
+  workflow_dispatch:
+jobs:
+  upstream-ci-refresh:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - run: git remote -vv
+#    - uses: actions/setup-go@v2
+#      with:
+#        go-version: '^1.16.6' # The Go version to download (if necessary) and use.
+#    - run: go version
+#    - run: make test submit-coverage
