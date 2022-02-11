@@ -34,8 +34,10 @@ type CloudStorageSpec struct {
 	// Tags for the bucket
 	// +kubebuilder:validation:Optional
 	Tags map[string]string `json:"tags,omitempty"`
-	// Region for the bucket to be in, will be us-east-1 if not set.
+	// *AWS* Region for the bucket to be in, will be us-east-1 if not set.
 	Region string `json:"region,omitempty"`
+	// *GCP* ProjectID for the bucket to be in, will be the default project if not set.
+	ProjectID string `json:"projectID,omitempty"`
 	// +kubebuilder:validation:Enum=aws
 	Provider CloudStorageProvider `json:"provider"`
 

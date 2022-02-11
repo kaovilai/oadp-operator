@@ -31,6 +31,8 @@ func NewClient(b v1alpha1.CloudStorage, c client.Client) (Client, error) {
 	switch b.Spec.Provider {
 	case v1alpha1.AWSBucketProvider:
 		return &awsBucketClient{bucket: b, client: c}, nil
+	case v1alpha1.GCPBucketProvider:
+		return &gcpBucketClient{bucket: b, client: c}, nil
 	default:
 		return nil, fmt.Errorf("unable to determine bucket client")
 	}

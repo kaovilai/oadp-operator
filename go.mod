@@ -3,6 +3,7 @@ module github.com/openshift/oadp-operator
 go 1.16
 
 require (
+	cloud.google.com/go/storage v1.20.0
 	github.com/Azure-Samples/azure-sdk-for-go-samples v0.0.0-20210506191746-b49c4162aa1d
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v0.20.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v0.2.0
