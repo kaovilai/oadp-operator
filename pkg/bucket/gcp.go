@@ -2,6 +2,7 @@ package bucket
 
 import (
 	"context"
+	"fmt"
 
 	"cloud.google.com/go/storage"
 	"github.com/openshift/oadp-operator/api/v1alpha1"
@@ -24,7 +25,12 @@ func (g gcpBucketClient) Create() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	
+	if g.bucket.Name == "" {
+		return false, fmt.Errorf("bucket name is empty")
+	}
+	if g.bucket.Spec.ProjectID == "" {
+		return false, fmt.Errorf("project id is empty")
+	}
 	// Create bucket 🪣
 	err = sc.Bucket(g.bucket.Spec.Name).Create(context.Background(), g.bucket.Spec.ProjectID, nil)
 	return err == nil, err
@@ -51,17 +57,17 @@ func (g gcpBucketClient) Delete() (bool, error) {
 	return err == nil, err
 }
 
-func (g gcpBucketClient) ForceCredentialRefresh() 	error {
+func (g gcpBucketClient) ForceCredentialRefresh() error {
 	//TODO: implement
 	return nil
 }
 
-func (g gcpBucketClient) getClient()(*storage.Client, error) {
+func (g gcpBucketClient) getClient() (*storage.Client, error) {
 	ctx := context.Background()
 	storageClient, err := storage.NewClient(ctx)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return storageClient, nil
 }
