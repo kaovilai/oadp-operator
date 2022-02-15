@@ -6,6 +6,7 @@ import (
 
 	"cloud.google.com/go/storage"
 	"github.com/openshift/oadp-operator/api/v1alpha1"
+	"google.golang.org/api/option"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -30,17 +31,18 @@ func (g gcpBucketClient) Create() (bool, error) {
 	if g.bucket.Name == "" {
 		return false, fmt.Errorf("bucket name is empty")
 	}
-	if g.bucket.Spec.ProjectID == "" {
-		return false, fmt.Errorf("project id is empty")
-	}
+	// Don't check for empty project ID. Defer to API defaults.
+	// if g.bucket.Spec.ProjectID == "" {
+	// 	return false, fmt.Errorf("project id is empty")
+	// }
 	// Create bucket 🪣
-	err = sc.Bucket(g.bucket.Spec.Name).Create(context.Background(), g.bucket.Spec.ProjectID, 
+	err = sc.Bucket(g.bucket.Spec.Name).Create(context.Background(), g.bucket.Spec.ProjectID,
 		&storage.BucketAttrs{
 			Location: g.bucket.Spec.Region,
 			// PublicAccessPrevention: ,
 			// StorageClass: ,
 			// VersioningEnabled: ,
-			Labels: g.bucket.Spec.Tags,	
+			Labels: g.bucket.Spec.Tags,
 		})
 	return err == nil, err
 }
@@ -77,10 +79,13 @@ func (g gcpBucketClient) ForceCredentialRefresh() error {
 // helper function to get GCP Storage client
 func (g gcpBucketClient) getClient() (*storage.Client, error) {
 	ctx := context.Background()
-	storageClient, err := storage.NewClient(ctx)
+	cred, err := getCredentialFromCloudStorageSecret(g.client, g.bucket)
 	if err != nil {
 		return nil, err
 	}
-
-	return storageClient, nil
+	//debug
+	credstring := string(cred)
+	fmt.Printf("credential: %s\n", credstring)
+	storageClient, err := storage.NewClient(ctx, option.WithAPIKey(string(cred)))
+	return storageClient, err
 }

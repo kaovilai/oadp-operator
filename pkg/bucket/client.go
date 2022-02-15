@@ -38,7 +38,7 @@ func NewClient(b v1alpha1.CloudStorage, c client.Client) (Client, error) {
 	}
 }
 
-func getCredentialFromCloudStorageSecret(a client.Client, cloudStorage v1alpha1.CloudStorage) (string, error) {
+func getCredentialFromCloudStorageSecretAsFilename(a client.Client, cloudStorage v1alpha1.CloudStorage) (string, error) {
 	var filename string
 	var ok bool
 	cloudStorageNamespacedName := types.NamespacedName{
@@ -48,16 +48,12 @@ func getCredentialFromCloudStorageSecret(a client.Client, cloudStorage v1alpha1.
 	if filename, ok = fileBucketCache[cloudStorageNamespacedName]; !ok {
 		// Look for file in tmp based on name.
 		// TODO: handle force credential refesh
-		secret := &corev1.Secret{}
-		err := a.Get(context.TODO(), types.NamespacedName{
-			Name:      cloudStorage.Spec.CreationSecret.Name,
-			Namespace: cloudStorage.Namespace,
-		}, secret)
+		
+		// cred := secret.Data[cloudStorage.Spec.CreationSecret.Key]
+		cred, err := getCredentialFromCloudStorageSecret(a, cloudStorage)
 		if err != nil {
 			return "", err
 		}
-
-		cred := secret.Data[cloudStorage.Spec.CreationSecret.Key]
 		//create a tmp file based on the bucket name, if it does not exist
 		dir, err := os.MkdirTemp("", fmt.Sprintf("secret-%v-%v", cloudStorage.Namespace, cloudStorage.Name))
 		if err != nil {
@@ -74,4 +70,16 @@ func getCredentialFromCloudStorageSecret(a client.Client, cloudStorage v1alpha1.
 	}
 
 	return filename, nil
+}
+
+func getCredentialFromCloudStorageSecret(a client.Client, cloudStorage v1alpha1.CloudStorage) ([]byte, error) {
+	secret := &corev1.Secret{}
+	err := a.Get(context.TODO(), types.NamespacedName{
+		Name:      cloudStorage.Spec.CreationSecret.Name,
+		Namespace: cloudStorage.Namespace,
+	}, secret)
+	if err != nil {
+		return nil, err
+	}
+	return secret.Data[cloudStorage.Spec.CreationSecret.Key], nil
 }

@@ -61,21 +61,25 @@ spec:
                   or container (azure)
                 type: string
               projectID:
-                description: '*GCP* ProjectID for the bucket to be in, will be the
+                description: '[GCP] ProjectID for the bucket to be in, will be the
                   default project if not set.'
                 type: string
               provider:
                 enum:
                 - aws
+                - gcp
+                - azure
                 type: string
               region:
-                description: '*AWS* Region for the bucket to be in, will be us-east-1
-                  if not set.'
+                description: Region for the bucket to be in, - AWS, will be us-east-1
+                  if not set. - GCP, equivalent to bucket location. Will be US if
+                  not set.
                 type: string
               tags:
                 additionalProperties:
                   type: string
-                description: Tags for the bucket
+                description: Tags for the bucket - For GCP, this will be used for
+                  labels
                 type: object
             required:
             - creationSecret

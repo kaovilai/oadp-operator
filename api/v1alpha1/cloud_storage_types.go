@@ -32,13 +32,16 @@ type CloudStorageSpec struct {
 	// EnableSharedConfig enable the use of shared config loading for AWS Buckets
 	EnableSharedConfig *bool `json:"enableSharedConfig,omitempty"`
 	// Tags for the bucket
+	// - For GCP, this will be used for labels
 	// +kubebuilder:validation:Optional
 	Tags map[string]string `json:"tags,omitempty"`
-	// *AWS* Region for the bucket to be in, will be us-east-1 if not set.
+	// Region for the bucket to be in,
+	// - AWS, will be us-east-1 if not set.
+	// - GCP, equivalent to bucket location. Will be US if not set.
 	Region string `json:"region,omitempty"`
-	// *GCP* ProjectID for the bucket to be in, will be the default project if not set.
+	// [GCP] ProjectID for the bucket to be in, will be the default project if not set.
 	ProjectID string `json:"projectID,omitempty"`
-	// +kubebuilder:validation:Enum=aws
+	// +kubebuilder:validation:Enum=aws;gcp;azure
 	Provider CloudStorageProvider `json:"provider"`
 
 	// https://pkg.go.dev/github.com/Azure/azure-sdk-for-go/sdk/storage/azblob@v0.2.0#section-readme
