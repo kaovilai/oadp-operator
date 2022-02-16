@@ -48,7 +48,7 @@ func getCredentialFromCloudStorageSecretAsFilename(a client.Client, cloudStorage
 	if filename, ok = fileBucketCache[cloudStorageNamespacedName]; !ok {
 		// Look for file in tmp based on name.
 		// TODO: handle force credential refesh
-		
+
 		// cred := secret.Data[cloudStorage.Spec.CreationSecret.Key]
 		cred, err := getCredentialFromCloudStorageSecret(a, cloudStorage)
 		if err != nil {

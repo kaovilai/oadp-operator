@@ -2,6 +2,7 @@ package bucket
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"cloud.google.com/go/storage"
@@ -36,7 +37,11 @@ func (g gcpBucketClient) Create() (bool, error) {
 	// 	return false, fmt.Errorf("project id is empty")
 	// }
 	// Create bucket 🪣
-	err = sc.Bucket(g.bucket.Spec.Name).Create(context.Background(), g.bucket.Spec.ProjectID,
+	projectID, err := g.getProjectID()
+	if err != nil {
+		return false, err
+	}
+	err = sc.Bucket(g.bucket.Spec.Name).Create(context.Background(), projectID,
 		&storage.BucketAttrs{
 			Location: g.bucket.Spec.Region,
 			// PublicAccessPrevention: ,
@@ -79,13 +84,35 @@ func (g gcpBucketClient) ForceCredentialRefresh() error {
 // helper function to get GCP Storage client
 func (g gcpBucketClient) getClient() (*storage.Client, error) {
 	ctx := context.Background()
-	cred, err := getCredentialFromCloudStorageSecret(g.client, g.bucket)
+	cred, err := getCredentialFromCloudStorageSecretAsFilename(g.client, g.bucket)
 	if err != nil {
 		return nil, err
 	}
-	//debug
-	credstring := string(cred)
-	fmt.Printf("credential: %s\n", credstring)
-	storageClient, err := storage.NewClient(ctx, option.WithAPIKey(string(cred)))
-	return storageClient, err
+	sc, err := storage.NewClient(ctx, option.WithCredentialsFile(cred))
+	return sc, err
+}
+
+// helper function to get project ID
+// Creation of storage bucket is done in a project.
+// We need to get project ID to use to create storage bucket.
+// We expect to receive Project ID in bucket.Spec.ProjectID.
+// Alternatively we can try to retrieve Project ID from secret.
+func (g gcpBucketClient) getProjectID() (string, error) {
+	if g.bucket.Spec.ProjectID != "" {
+		return g.bucket.Spec.ProjectID, nil
+	}
+	cred, err := getCredentialFromCloudStorageSecret(g.client, g.bucket)
+	if err != nil {
+		return "", err
+	}
+	var credMap map[string]interface{}
+	err = json.Unmarshal(cred, &credMap)
+	if err != nil {
+		return "", err
+	}
+	_, foundProjectIDInSecret := credMap["project_id"]
+	if foundProjectIDInSecret {
+		return credMap["project_id"].(string), nil
+	}
+	return "", fmt.Errorf("project id is not set in secret or CloudStorage spec")
 }
