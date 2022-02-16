@@ -69,7 +69,6 @@ spec:
                 enum:
                 - aws
                 - gcp
-                - azure
                 type: string
               region:
                 description: Region for the bucket to be in, - AWS, will be us-east-1

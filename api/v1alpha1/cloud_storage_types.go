@@ -42,7 +42,7 @@ type CloudStorageSpec struct {
 	// Required for GCP: ProjectID for the bucket to be in.
 	// If not set, a best attempt will be made to retrieve Project ID from secret JSON.
 	ProjectID string `json:"projectID,omitempty"`
-	// +kubebuilder:validation:Enum=aws;gcp;azure
+	// +kubebuilder:validation:Enum=aws;gcp
 	Provider CloudStorageProvider `json:"provider"`
 
 	// https://pkg.go.dev/github.com/Azure/azure-sdk-for-go/sdk/storage/azblob@v0.2.0#section-readme
