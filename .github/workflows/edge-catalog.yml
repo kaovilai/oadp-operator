@@ -13,6 +13,12 @@ env:
 jobs:
   publish-new-edge-catalog: #test and submit coverage to codecov on pushes
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # This is used to complete the identity challenge
+      # with sigstore/fulcio when running outside of PRs.
+      id-token: write
     steps:
     - uses: actions/checkout@v2
     - run: |
@@ -81,8 +87,7 @@ jobs:
         COSIGN_EXPERIMENTAL: "true"
       # This step uses the identity token to provision an ephemeral certificate
       # against the sigstore community Fulcio instance.
-      run: | 
-        cosign sign ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }}
+      run: cosign sign ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }}
     - name: make bundle
       run: IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }} make bundle
     - name: Extract Docker metadata
@@ -112,8 +117,7 @@ jobs:
         COSIGN_EXPERIMENTAL: "true"
       # This step uses the identity token to provision an ephemeral certificate
       # against the sigstore community Fulcio instance.
-      run: | 
-        cosign sign ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle@${{ steps.build-and-push-bundle.outputs.digest }}
+      run: cosign sign ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle@${{ steps.build-and-push-bundle.outputs.digest }}
     - name: git add
       run: git add .
     - name: git status
