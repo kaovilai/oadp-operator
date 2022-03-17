@@ -77,7 +77,7 @@ jobs:
       run: | 
         cosign sign ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }}
     - name: make bundle
-      run: make bundle
+      run: IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }} make bundle
     - name: Extract Docker metadata
       id: meta-bundle
       uses: docker/metadata-action@98669ae865ea3cffbcbaa878cf57c20bbf1c6c38
