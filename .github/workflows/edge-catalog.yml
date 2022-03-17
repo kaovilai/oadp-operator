@@ -96,7 +96,8 @@ jobs:
       id: build-and-push-bundle
       uses: docker/build-push-action@ad44023a93711e3deb337508980b4b5e9bcdc5dc
       with:
-        context: bundle.Dockerfile
+        file: bundle.Dockerfile
+        context: .
         push: ${{ github.event_name != 'pull_request' }}
         tags: ${{ steps.meta-bundle.outputs.tags }}
         labels: ${{ steps.meta-bundle.outputs.labels }}
