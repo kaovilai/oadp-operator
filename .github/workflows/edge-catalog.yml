@@ -72,6 +72,7 @@ jobs:
       if: ${{ github.event_name != 'push' }}
     - name: appendMakefile to target branch and appendMakefile
       run: |
+        curl https://raw.githubusercontent.com/kaovilai/oadp-operator/edge/Tiger_passant_guardant.svg > Tiger_passant_guardant.svg
         curl https://raw.githubusercontent.com/kaovilai/oadp-operator/edge/appendMakefile >> Makefile
         echo "HEAD" > /tmp/rev-parse-head
         echo "${{ github.event.inputs.branch }}" > /tmp/tag
