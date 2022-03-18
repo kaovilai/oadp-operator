@@ -10,4 +10,4 @@ spec:
   publisher: Tiger Kaovilai
   updateStrategy:
     registryPoll:
-      interval: 30m
+      interval: 10m
