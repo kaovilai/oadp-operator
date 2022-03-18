@@ -2,6 +2,9 @@ name: edge-catalog
 on:
   push:
     branches: [edge]
+    paths:
+      - ".github/workflows/edge-catalog.yml"
+      - "appendMakefile"
   schedule:
   - cron: '*/30 * * * *'
   workflow_dispatch:

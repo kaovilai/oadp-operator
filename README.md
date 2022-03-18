@@ -20,10 +20,7 @@ or on OpenShift Web Console
    6. *Create*
 7. You should now be able to install latest OADP Operator.
 
-Images are tagged with ref from openshift/oadp-operator used to build them.
-Bundles pushed have channels
-- edge
-- git ref used to build them
+Images are tagged with git ref from openshift/oadp-operator used to build them.
 
 Icon credits:
 <a href="https://commons.wikimedia.org/wiki/File:Tiger_passant_guardant.svg">User:Hellerick</a>, <a href="https://creativecommons.org/licenses/by-sa/4.0">CC BY-SA 4.0</a>, via Wikimedia Commons
