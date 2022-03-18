@@ -1,0 +1,2 @@
+catalog-build-replaces: opm ## Build a catalog image using replace mode
+	$(OPM) index add --container-tool docker --mode replaces --tag $(CATALOG_IMG) --bundles $(BUNDLE_IMGS) $(FROM_INDEX_OPT)

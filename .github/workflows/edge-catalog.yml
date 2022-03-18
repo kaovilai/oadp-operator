@@ -35,7 +35,11 @@ jobs:
         git fetch upstream
         git reset upstream/master
         git add .github/workflows/edge-catalog.yml # preserve edge-catalog
+        git add appendMakefile # preserve appendMakefile
         git restore . # discard old changes
+        # appendMakefile
+        cat appendMakefile >> Makefile
+    - run: cat Makefile
     - name: get upstream git ref
       id: upstream-git-ref
       run: echo "::set-output name=GIT_REF::$(git rev-parse upstream/master)"
@@ -109,7 +113,7 @@ jobs:
       # against the sigstore community Fulcio instance.
       run: cosign sign ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }}
     - name: make bundle
-      run: CHANNELS=edge,${{ steps.upstream-git-ref.outputs.GIT_REF }} IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }} make bundle
+      run: CHANNELS=edge,${{ steps.upstream-git-ref.outputs.GIT_REF }} VERSION=${{ steps.upstream-git-ref.outputs.GIT_REF }} IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }} make bundle
     - name: Extract Docker metadata
       id: meta-bundle
       uses: docker/metadata-action@98669ae865ea3cffbcbaa878cf57c20bbf1c6c38
@@ -141,16 +145,30 @@ jobs:
       # This step uses the identity token to provision an ephemeral certificate
       # against the sigstore community Fulcio instance.
       run: cosign sign ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle@${{ steps.build-and-push-bundle.outputs.digest }}
-    - name: add bundle to catalog
-      run: opm render ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.upstream-git-ref.outputs.GIT_REF }} --output yaml >> catalog/operator.yaml
-    - name: cat catalog
-      run: cat catalog/operator.yaml
-    - name: ls
-      run: ls catalog/
-    - name: opm validate
-      run: opm validate catalog/
-    - name: cat resulting
-      run: cat catalog/operator.yaml
+    - name: add bundle to git ref catalog build and push
+      run: |
+        CATALOG_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.upstream-git-ref.outputs.GIT_REF }} \
+        BUNDLE_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.upstream-git-ref.outputs.GIT_REF }} \
+        make catalog-build catalog-push
+    - name: add bundle to edge catalog build and push
+      run: |
+        CATALOG_BASE_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:edge \
+        CATALOG_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:edge \
+        BUNDLE_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.upstream-git-ref.outputs.GIT_REF }} \
+        make catalog-build-replaces catalog-push
+    # - name: add bundle to catalog
+    #   run: opm render ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.upstream-git-ref.outputs.GIT_REF }} --output yaml >> catalog-blocks/render.yaml
+    # - name: add bundle to edge channel entry
+    #   run: |
+    #     echo "" >> catalog-blocks/edge-entries.yaml
+    # - name: cat catalog
+    #   run: cat catalog/operator.yaml
+    # - name: ls
+    #   run: ls catalog/
+    # - name: opm validate
+    #   run: opm validate catalog/
+    # - name: cat resulting
+    #   run: cat catalog/operator.yaml
     - name: git add
       run: git add .
     - name: git status
