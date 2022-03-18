@@ -1,16 +1,19 @@
 name: edge-catalog
 on:
   push:
-    paths-ignore:
-    # ignore docs
-      - docs/**
-      - hack/**
-      - LICENSE
-    # any md
-      - "**/*.md"
+    branches: [edge]
+    paths:
+      - ".github/workflows/edge-catalog.yml"
+      - "appendMakefile"
   schedule:
   - cron: '*/30 * * * *'
   workflow_dispatch:
+    inputs:
+      branch:
+        default: master
+        description: The branch to build catalog for
+        type: string
+      
   watch:
     types: [started]
 env:
@@ -21,6 +24,7 @@ env:
 jobs:
   publish-new-edge-catalog: #test and submit coverage to codecov on pushes
     runs-on: ubuntu-latest
+    if: ${{ !github.event.workflow_dispatch || github.event.workflow_dispatch && github.event.workflow_dispatch.inputs.branch != 'edge' && github.event.workflow_dispatch.inputs.branch != '' }}
     permissions:
       contents: read
       packages: write
@@ -49,25 +53,40 @@ jobs:
         git remote add upstream https://github.com/openshift/oadp-operator.git
         git fetch upstream
         git reset upstream/master
-        git add .github/workflows/edge-catalog.yml # preserve edge-catalog
         git add appendMakefile # preserve appendMakefile
         git restore . # discard old changes
         # appendMakefile
         cat appendMakefile >> Makefile
         echo "upstream/master" > /tmp/rev-parse-head
-      if: ${{ github.ref == 'refs/heads/edge' }}
-    - name: Append edge appendMakefile content to non-edge Makefile
+        echo "edge" > /tmp/tag
+      if: ${{ !github.event.workflow_dispatch }}
+    - name: Reset to target branch and appendMakefile
       run: |
-        # add non conflicting files from edge branch
-        curl https://raw.githubusercontent.com/kaovilai/oadp-operator/edge/appendMakefile >> Makefile
+        git reset ${{ github.event.workflow_dispatch.inputs.branch }}
+        git add appendMakefile # preserve appendMakefile
+        git restore . # discard old changes
+        # appendMakefile
+        cat appendMakefile >> Makefile
         echo "HEAD" > /tmp/rev-parse-head
-      if: ${{ github.ref != 'refs/heads/edge' }}
+        echo "${{ github.event.workflow_dispatch.inputs.branch }}" > /tmp/tag
+      if: ${{ github.event.workflow_dispatch }}
+    # - name: Append edge appendMakefile content to non-edge Makefile
+    #   run: |
+    #     # add non conflicting files from edge branch
+    #     curl https://raw.githubusercontent.com/kaovilai/oadp-operator/edge/appendMakefile >> Makefile
+    #     echo "HEAD" > /tmp/rev-parse-head
+    #   if: ${{ github.ref != 'refs/heads/edge' }}
     - run: cat Makefile
     - name: get git ref
       id: git-ref
       run: echo "::set-output name=GIT_REF::$(git rev-parse $(cat /tmp/rev-parse-head))"
     - name: echo git-ref
       run: echo ${{ steps.git-ref.outputs.GIT_REF }}
+    - name: get build tag
+      id: build-tag
+      run: echo "::set-output name=BUILD_TAG::$(git rev-parse $(cat /tmp/tag))"
+    - name: echo build-tag
+      run: echo ${{ steps.build-tag.outputs.BUILD_TAG }}
     - name: get year month date hour minutes
       id: dateversion
       run: echo "::set-output name=YMdHM::$(date -u +%Y%m%d%H%M)"
@@ -117,7 +136,7 @@ jobs:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         tags: |
           type=raw,value=${{ steps.git-ref.outputs.GIT_REF }}
-          type=raw,value=${{ github.ref_name }}
+          type=raw,value=${{ steps.build-tag.outputs.BUILD_TAG }}
     # Build and push Docker image with Buildx (don't push on PR)
     # https://github.com/docker/build-push-action
     - name: Build and push Docker image
@@ -141,7 +160,7 @@ jobs:
       # against the sigstore community Fulcio instance.
       run: cosign sign ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }}
     - name: make bundle
-      run: CHANNELS=${{ github.ref_name }},${{ steps.git-ref.outputs.GIT_REF }} VERSION=0.99.${{ steps.dateversion.outputs.YMdHM }} IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }} make replace-icon bundle
+      run: CHANNELS=${{ steps.build-tag.outputs.BUILD_TAG }},${{ steps.git-ref.outputs.GIT_REF }} VERSION=0.99.${{ steps.dateversion.outputs.YMdHM }} IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }} make replace-icon bundle
     - name: Extract Docker metadata
       id: meta-bundle
       uses: docker/metadata-action@98669ae865ea3cffbcbaa878cf57c20bbf1c6c38
@@ -149,7 +168,7 @@ jobs:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle
         tags: |
           type=raw,value=${{ steps.git-ref.outputs.GIT_REF }}
-          type=raw,value=${{ github.ref_name }}
+          type=raw,value=${{ steps.build-tag.outputs.BUILD_TAG }}
     # Build and push Docker image with Buildx (don't push on PR)
     # https://github.com/docker/build-push-action
     - name: Build and push Docker image
@@ -178,17 +197,23 @@ jobs:
         CATALOG_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.git-ref.outputs.GIT_REF }} \
         BUNDLE_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.git-ref.outputs.GIT_REF }} \
         make catalog-build catalog-push
-    - name: add bundle to ${{ github.ref_name }} existing catalog build and push
+    - name: check ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }} can be pulled
+      id: catalog-exist
+      continue-on-error: true
+      run: docker pull ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }}
+    - name: add bundle to ${{ steps.build-tag.outputs.BUILD_TAG }} existing catalog build and push
+      if: ${{ steps.catalog-exist.outcome == 'success' }}
       id: add-to-existing-catalog
+      continue-on-error: true
       run: |
-        CATALOG_BASE_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ github.ref_name }} \
-        CATALOG_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ github.ref_name }} \
+        CATALOG_BASE_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }} \
+        CATALOG_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }} \
         BUNDLE_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.git-ref.outputs.GIT_REF }} \
         make catalog-build-replaces catalog-push
-    - name: if existing fail, add bundle to new ${{ github.ref_name }} catalog build and push
-      if: ${{ steps.add-to-existing-catalog.outcome == 'failure' }}
+    - name: if existing fail, add bundle to new ${{ steps.build-tag.outputs.BUILD_TAG }} catalog build and push
+      if: ${{ steps.catalog-exist.outcome != 'success' || steps.add-to-existing-catalog.outcome == 'failure' }}
       run: |
-        CATALOG_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ github.ref_name }} \
+        CATALOG_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }} \
         BUNDLE_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.git-ref.outputs.GIT_REF }} \
         make catalog-build-replaces catalog-push
     # - name: add bundle to catalog
