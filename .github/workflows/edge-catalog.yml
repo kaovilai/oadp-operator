@@ -20,6 +20,14 @@ jobs:
       # with sigstore/fulcio when running outside of PRs.
       id-token: write
     steps:
+    - uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
     - uses: actions/checkout@v2
     - run: |
         git remote -vv
