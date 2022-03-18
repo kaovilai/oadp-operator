@@ -1,4 +1,23 @@
-Edge AKA latest version of OADP-Operator. Not supported.
+Catalog source for installing latest commits from [OADP Operator](https://github.com/openshift/oadp-operator). Not supported.
+
+Install catalogsource
+```sh
+oc apply -f https://raw.githubusercontent.com/kaovilai/oadp-operator/edge/catalogsource.yaml
+```
+
+or on OpenShift Web Console
+1. Administration
+2. Cluster Settings
+3. Configuration
+4. OperatorHub
+5. Sources
+6. Create CatalogSource
+   1. name: `oadp-edge`
+   2. display name: `Tiger's OADP Edge Catalog`
+   3. publisher: `Tiger Kaovilai`
+   4. image: `ghcr.io/kaovilai/oadp-operator-catalog:edge`
+   5. *Create*
+7. You should now be able to install latest OADP Operator.
 
 Images are tagged with ref from openshift/oadp-operator used to build them.
 Bundles pushed have channels
