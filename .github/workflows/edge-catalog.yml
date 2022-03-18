@@ -25,7 +25,7 @@ env:
 jobs:
   publish-new-edge-catalog: #test and submit coverage to codecov on pushes
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == "push" || github.event.workflow_dispatch.inputs.branch != 'edge' && github.event.workflow_dispatch.inputs.branch != '' }}
+    if: ${{ github.event_name == 'push' || github.event.workflow_dispatch.inputs.branch != 'edge' && github.event.workflow_dispatch.inputs.branch != '' }}
     permissions:
       contents: read
       packages: write
@@ -63,7 +63,7 @@ jobs:
         cat appendMakefile >> Makefile
         echo "upstream/master" > /tmp/rev-parse-head
         echo "edge" > /tmp/tag
-      if: ${{ github.event_name == "push" }}
+      if: ${{ github.event_name == 'push' }}
     - name: Reset to target branch and appendMakefile
       run: |
         git reset ${{ github.event.workflow_dispatch.inputs.branch }}
@@ -73,7 +73,7 @@ jobs:
         cat appendMakefile >> Makefile
         echo "HEAD" > /tmp/rev-parse-head
         echo "${{ github.event.workflow_dispatch.inputs.branch }}" > /tmp/tag
-      if: ${{ github.event_name != "push" }}
+      if: ${{ github.event_name != 'push' }}
     # - name: Append edge appendMakefile content to non-edge Makefile
     #   run: |
     #     # add non conflicting files from edge branch
