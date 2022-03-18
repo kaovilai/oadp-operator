@@ -51,6 +51,11 @@ jobs:
       run: echo "::set-output name=GIT_REF::$(git rev-parse upstream/master)"
     - name: echo upstream-git-ref
       run: echo ${{ steps.upstream-git-ref.outputs.GIT_REF }}
+    - name: get year month date hour minutes
+      id: dateversion
+      run: echo "::set-output name=YMdHM::$(date +%Y%m%d%H%M)"
+    - name: echo dateversion
+      run: echo ${{ steps.dateversion.outputs.YMdHM }}
 
     # Install the cosign tool except on PR
     # https://github.com/sigstore/cosign-installer
@@ -119,7 +124,7 @@ jobs:
       # against the sigstore community Fulcio instance.
       run: cosign sign ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }}
     - name: make bundle
-      run: CHANNELS=edge,${{ steps.upstream-git-ref.outputs.GIT_REF }} IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }} make bundle
+      run: CHANNELS=edge,${{ steps.upstream-git-ref.outputs.GIT_REF }} VERSION=v0.99.${{ steps.dateversion.outputs.YMdHM }} IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }} make bundle
     - name: Extract Docker metadata
       id: meta-bundle
       uses: docker/metadata-action@98669ae865ea3cffbcbaa878cf57c20bbf1c6c38
@@ -158,6 +163,7 @@ jobs:
         make catalog-build catalog-push
     - name: add bundle to edge catalog build and push
       run: |
+        CATALOG_BASE_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:edge \
         CATALOG_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:edge \
         BUNDLE_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.upstream-git-ref.outputs.GIT_REF }} \
         make catalog-build-replaces catalog-push
