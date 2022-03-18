@@ -3,7 +3,7 @@ on:
   push:
     branches: [edge]
   schedule:
-  - cron: '40 23 * * *'
+  - cron: '*/30 * * * *'
   workflow_dispatch:
 env:
   # Use docker.io for Docker Hub if empty
@@ -167,6 +167,7 @@ jobs:
         CATALOG_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:edge \
         BUNDLE_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.upstream-git-ref.outputs.GIT_REF }} \
         make catalog-build-replaces catalog-push
+      continue-on-error: true
     # - name: add bundle to catalog
     #   run: opm render ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.upstream-git-ref.outputs.GIT_REF }} --output yaml >> catalog-blocks/render.yaml
     # - name: add bundle to edge channel entry
