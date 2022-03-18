@@ -28,6 +28,12 @@ jobs:
         key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
         restore-keys: |
           ${{ runner.os }}-go-
+    # In this step, this action saves a list of existing images,
+    # the cache is created without them in the post run.
+    # It also restores the cache if it exists.
+    - uses: satackey/action-docker-layer-caching@v0.0.11
+      # Ignore the failure of a step and avoid terminating the job.
+      continue-on-error: true
     - uses: actions/checkout@v2
     - run: |
         git remote -vv
@@ -152,7 +158,6 @@ jobs:
         make catalog-build catalog-push
     - name: add bundle to edge catalog build and push
       run: |
-        CATALOG_BASE_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:edge \
         CATALOG_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:edge \
         BUNDLE_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.upstream-git-ref.outputs.GIT_REF }} \
         make catalog-build-replaces catalog-push
