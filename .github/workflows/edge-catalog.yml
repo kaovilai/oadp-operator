@@ -56,7 +56,7 @@ jobs:
       run: echo ${{ steps.upstream-git-ref.outputs.GIT_REF }}
     - name: get year month date hour minutes
       id: dateversion
-      run: echo "::set-output name=YMdHM::$(date +%Y%m%d%H%M)"
+      run: echo "::set-output name=YMdHM::$(date -u +%Y%m%d%H%M)"
     - name: echo dateversion
       run: echo ${{ steps.dateversion.outputs.YMdHM }}
 
