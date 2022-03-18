@@ -1,7 +1,15 @@
 catalog-build-replaces: opm ## Build a catalog image using replace mode
 	$(OPM) index add --container-tool docker --mode replaces --tag $(CATALOG_IMG) --bundles $(BUNDLE_IMGS) $(FROM_INDEX_OPT)
 
-replace-icon:
+replace-support:
+	yq eval '.metadata.annotations.support = "Tiger Kaovilai"' config/manifests/bases/oadp-operator.clusterserviceversion.yaml > config/manifests/bases/oadp-operator.clusterserviceversion.yaml.yqresult
+	mv config/manifests/bases/oadp-operator.clusterserviceversion.yaml.yqresult config/manifests/bases/oadp-operator.clusterserviceversion.yaml
+	yq eval '.spec.provider.name = "Tiger Kaovilai"' config/manifests/bases/oadp-operator.clusterserviceversion.yaml > config/manifests/bases/oadp-operator.clusterserviceversion.yaml.yqresult
+	mv config/manifests/bases/oadp-operator.clusterserviceversion.yaml.yqresult config/manifests/bases/oadp-operator.clusterserviceversion.yaml
+	yq eval '.metadata.annotations.containerImage = "${IMG}"' config/manifests/bases/oadp-operator.clusterserviceversion.yaml > config/manifests/bases/oadp-operator.clusterserviceversion.yaml.yqresult
+	mv config/manifests/bases/oadp-operator.clusterserviceversion.yaml.yqresult config/manifests/bases/oadp-operator.clusterserviceversion.yaml
+
+replace-icon: replace-support
 	yq eval '.spec.icon[0].mediatype = "image/svg+xml"' config/manifests/bases/oadp-operator.clusterserviceversion.yaml > config/manifests/bases/oadp-operator.clusterserviceversion.yaml.yqresult
 	mv config/manifests/bases/oadp-operator.clusterserviceversion.yaml.yqresult config/manifests/bases/oadp-operator.clusterserviceversion.yaml
 	yq eval '.spec.icon[0].base64data = "${shell base64 -i Tiger_passant_guardant.svg}"' \
