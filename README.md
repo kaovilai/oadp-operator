@@ -25,5 +25,7 @@ Available tags:
 - `edge` receive automatic updates (hopefully).
 - `$(git rev-parse upstream/master)` pin to a specific upstream/master commit.
 
+GitHub Actions is set to refresh available images every 30 minutes.
+
 Icon credits:
 <a href="https://commons.wikimedia.org/wiki/File:Tiger_passant_guardant.svg">User:Hellerick</a>, <a href="https://creativecommons.org/licenses/by-sa/4.0">CC BY-SA 4.0</a>, via Wikimedia Commons
