@@ -84,7 +84,7 @@ jobs:
       run: echo ${{ steps.git-ref.outputs.GIT_REF }}
     - name: get build tag
       id: build-tag
-      run: echo "::set-output name=BUILD_TAG::$(git rev-parse $(cat /tmp/tag))"
+      run: echo "::set-output name=BUILD_TAG::$(cat /tmp/tag)"
     - name: echo build-tag
       run: echo ${{ steps.build-tag.outputs.BUILD_TAG }}
     - name: get year month date hour minutes
