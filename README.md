@@ -13,7 +13,7 @@ or on OpenShift Web Console
 5. Sources
 6. Create CatalogSource
    1. name: `oadp-edge`
-   2. display name: `Tiger's OADP Edge Catalog`
+   2. display name: `Tiger's OADP Edge`
    3. publisher: `Tiger Kaovilai`
    4. image: `ghcr.io/kaovilai/oadp-operator-catalog:edge`
    5. Availability: *Cluster-wide CatalogSource*

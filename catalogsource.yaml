@@ -6,7 +6,7 @@ metadata:
 spec:
   sourceType: grpc
   image: ghcr.io/kaovilai/oadp-operator-catalog:edge
-  displayName: Tiger's OADP Edge Catalog
+  displayName: Tiger's OADP Edge
   publisher: Tiger Kaovilai
   updateStrategy:
     registryPoll:
