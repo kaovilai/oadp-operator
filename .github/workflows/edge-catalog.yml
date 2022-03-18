@@ -215,7 +215,7 @@ jobs:
         BUNDLE_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.git-ref.outputs.GIT_REF }} \
         make catalog-build-replaces catalog-push
     - name: if existing fail, add bundle to new ${{ steps.build-tag.outputs.BUILD_TAG }} catalog build and push
-      if: ${{ steps.catalog-exist.outcome != 'success' || steps.add-to-existing-catalog.outcome == 'failure' }}
+      if: ${{ steps.catalog-exist.outcome != 'success'}}
       run: |
         CATALOG_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }} \
         BUNDLE_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.git-ref.outputs.GIT_REF }} \
