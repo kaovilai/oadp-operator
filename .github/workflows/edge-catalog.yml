@@ -30,9 +30,9 @@ jobs:
         git restore . # discard old changes
     - name: get upstream git ref
       id: upstream-git-ref
-      run: git rev-parse upstream/master
+      run: echo "::set-output name=GIT_REF::$(git rev-parse upstream/master)"
     - name: echo upstream-git-ref
-      run: echo ${{ steps.upstream-git-ref }}
+      run: echo ${{ steps.upstream-git-ref.outputs.GIT_REF }}
 
     # Install the cosign tool except on PR
     # https://github.com/sigstore/cosign-installer
@@ -76,7 +76,7 @@ jobs:
       with:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         tags: |
-          type=raw,value=${{ steps.upstream-git-ref.outputs }}
+          type=raw,value=${{ steps.upstream-git-ref.outputs.GIT_REF }}
           type=raw,value=edge
     # Build and push Docker image with Buildx (don't push on PR)
     # https://github.com/docker/build-push-action
@@ -101,14 +101,14 @@ jobs:
       # against the sigstore community Fulcio instance.
       run: cosign sign ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }}
     - name: make bundle
-      run: CHANNELS=edge,${{ steps.upstream-git-ref.outputs }} IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }} make bundle
+      run: CHANNELS=edge,${{ steps.upstream-git-ref.outputs.GIT_REF }} IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }} make bundle
     - name: Extract Docker metadata
       id: meta-bundle
       uses: docker/metadata-action@98669ae865ea3cffbcbaa878cf57c20bbf1c6c38
       with:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle
         tags: |
-          type=raw,value=${{ steps.upstream-git-ref.outputs }}
+          type=raw,value=${{ steps.upstream-git-ref.outputs.GIT_REF }}
           type=raw,value=edge
     # Build and push Docker image with Buildx (don't push on PR)
     # https://github.com/docker/build-push-action
@@ -134,7 +134,7 @@ jobs:
       # against the sigstore community Fulcio instance.
       run: cosign sign ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle@${{ steps.build-and-push-bundle.outputs.digest }}
     - name: add bundle to catalog
-      run: opm render ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.upstream-git-ref.outputs }} --output yaml >> catalog/operator.yaml
+      run: opm render ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.upstream-git-ref.outputs.GIT_REF }} --output yaml >> catalog/operator.yaml
     - name: ls
       run: ls catalog/
     - name: opm validate
