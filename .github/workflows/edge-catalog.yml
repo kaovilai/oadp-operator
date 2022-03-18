@@ -7,7 +7,7 @@ on:
       - hack/**
       - LICENSE
     # any md
-      - **/*.md
+      - "**/*.md"
   schedule:
   - cron: '*/30 * * * *'
   workflow_dispatch:
@@ -55,13 +55,13 @@ jobs:
         # appendMakefile
         cat appendMakefile >> Makefile
         echo "upstream/master" > /tmp/rev-parse-head
-      if: github.ref == "refs/heads/edge"
+      if: ${{ github.ref == 'refs/heads/edge' }}
     - name: Append edge appendMakefile content to non-edge Makefile
       run: |
         # add non conflicting files from edge branch
         curl https://raw.githubusercontent.com/kaovilai/oadp-operator/edge/appendMakefile >> Makefile
         echo "HEAD" > /tmp/rev-parse-head
-      if: github.ref != "refs/heads/edge"
+      if: ${{ github.ref != 'refs/heads/edge' }}
     - run: cat Makefile
     - name: get git ref
       id: git-ref
@@ -92,7 +92,7 @@ jobs:
         curl -LO ${OPM_DL_URL}/${OS}-${ARCH}-opm
         chmod +x ${OS}-${ARCH}-opm && sudo mv ${OS}-${ARCH}-opm /usr/local/bin/opm
     - name: Install cosign
-      if: github.event_name != 'pull_request'
+      if: ${{ github.event_name != 'pull_request' }}
       uses: sigstore/cosign-installer@1e95c1de343b5b0c23352d6417ee3e48d5bcd422
       with:
         cosign-release: 'v1.4.0'
@@ -102,7 +102,7 @@ jobs:
     # Login against a Docker registry except on PR
     # https://github.com/docker/login-action
     - name: Log into registry ${{ env.REGISTRY }}
-      if: github.event_name != 'pull_request'
+      if: ${{ github.event_name != 'pull_request' }}
       uses: docker/login-action@28218f9b04b4f3f62068d7b6ce6ca5b26e35336c
       with:
         registry: ${{ env.REGISTRY }}
