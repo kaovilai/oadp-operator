@@ -21,7 +21,7 @@ or on OpenShift Web Console
 7. You should now be able to install latest OADP Operator.
 
 Images are tagged with git ref from openshift/oadp-operator used to build them.
-Available tags:
+Available catalog tags:
 - `edge` receive automatic updates (hopefully).
 - `$(git rev-parse upstream/master)` pin to a specific upstream/master commit.
 
