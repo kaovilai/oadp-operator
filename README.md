@@ -27,5 +27,8 @@ Available tags:
 
 GitHub Actions is set to refresh available images every 30 minutes.
 
+Version numbering:
+0.99.YYYYMMDDHHMM, year month date hour minutes (UTC)
+
 Icon credits:
 <a href="https://commons.wikimedia.org/wiki/File:Tiger_passant_guardant.svg">User:Hellerick</a>, <a href="https://creativecommons.org/licenses/by-sa/4.0">CC BY-SA 4.0</a>, via Wikimedia Commons
