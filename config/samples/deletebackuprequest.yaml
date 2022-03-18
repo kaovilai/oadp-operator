@@ -1,6 +1,0 @@
-apiVersion: velero.io/v1
-kind: DeleteBackupRequest
-metadata:
-  name: deletebackuprequest
-  namespace: openshift-adp
-spec: {}
