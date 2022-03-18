@@ -16,7 +16,8 @@ or on OpenShift Web Console
    2. display name: `Tiger's OADP Edge Catalog`
    3. publisher: `Tiger Kaovilai`
    4. image: `ghcr.io/kaovilai/oadp-operator-catalog:edge`
-   5. *Create*
+   5. Availability: *Cluster-wide CatalogSource*
+   6. *Create*
 7. You should now be able to install latest OADP Operator.
 
 Images are tagged with ref from openshift/oadp-operator used to build them.
