@@ -13,6 +13,7 @@ on:
         default: master
         description: The branch to build catalog for
         type: string
+        required: true
       
   watch:
     types: [started]
@@ -24,7 +25,7 @@ env:
 jobs:
   publish-new-edge-catalog: #test and submit coverage to codecov on pushes
     runs-on: ubuntu-latest
-    if: ${{ !github.event.workflow_dispatch || github.event.workflow_dispatch && github.event.workflow_dispatch.inputs.branch != 'edge' && github.event.workflow_dispatch.inputs.branch != '' }}
+    if: ${{ github.event_name == "push" || github.event.workflow_dispatch.inputs.branch != 'edge' && github.event.workflow_dispatch.inputs.branch != '' }}
     permissions:
       contents: read
       packages: write
@@ -32,8 +33,8 @@ jobs:
       # with sigstore/fulcio when running outside of PRs.
       id-token: write
     env:
-      EVENT_TYPE: ${{ github.event.type }}
-      WORKFLOW_DISPATCH: ${{ github.event.workflow_dispatch }}
+      EVENT_NAME: ${{ github.event_name }}
+      WORKFLOW_DISPATCH_INPUT_BRANCH: ${{ github.event.workflow_dispatch.inputs.branch }}
     steps:
     - uses: actions/cache@v2
       with:
@@ -62,7 +63,7 @@ jobs:
         cat appendMakefile >> Makefile
         echo "upstream/master" > /tmp/rev-parse-head
         echo "edge" > /tmp/tag
-      if: ${{ !github.event.workflow_dispatch }}
+      if: ${{ github.event_name == "push" }}
     - name: Reset to target branch and appendMakefile
       run: |
         git reset ${{ github.event.workflow_dispatch.inputs.branch }}
@@ -72,7 +73,7 @@ jobs:
         cat appendMakefile >> Makefile
         echo "HEAD" > /tmp/rev-parse-head
         echo "${{ github.event.workflow_dispatch.inputs.branch }}" > /tmp/tag
-      if: ${{ github.event.workflow_dispatch }}
+      if: ${{ github.event_name != "push" }}
     # - name: Append edge appendMakefile content to non-edge Makefile
     #   run: |
     #     # add non conflicting files from edge branch
