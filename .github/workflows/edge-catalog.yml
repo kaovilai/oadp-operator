@@ -135,6 +135,8 @@ jobs:
       run: cosign sign ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle@${{ steps.build-and-push-bundle.outputs.digest }}
     - name: add bundle to catalog
       run: opm render ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.upstream-git-ref.outputs.GIT_REF }} --output yaml >> catalog/operator.yaml
+    - name: cat catalog
+      run: cat catalog/operator.yaml
     - name: ls
       run: ls catalog/
     - name: opm validate
