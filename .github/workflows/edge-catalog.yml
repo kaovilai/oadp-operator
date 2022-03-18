@@ -8,6 +8,8 @@ on:
   schedule:
   - cron: '*/30 * * * *'
   workflow_dispatch:
+  watch:
+    types: [started]
 env:
   # Use docker.io for Docker Hub if empty
   REGISTRY: ghcr.io
