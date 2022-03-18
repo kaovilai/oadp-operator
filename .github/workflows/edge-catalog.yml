@@ -51,6 +51,7 @@ jobs:
       # Ignore the failure of a step and avoid terminating the job.
       continue-on-error: true
     - uses: actions/checkout@v2
+      if: ${{ github.event_name == 'push' }}
     - name: Get upstream/master
       run: |
         git remote -vv
@@ -64,22 +65,17 @@ jobs:
         echo "upstream/master" > /tmp/rev-parse-head
         echo "edge" > /tmp/tag
       if: ${{ github.event_name == 'push' }}
-    - name: Reset to target branch and appendMakefile
+    - name: checkout target branch
+      uses: actions/checkout@v2
+      with:
+        ref: ${{ github.event.inputs.branch }}
+      if: ${{ github.event_name != 'push' }}
+    - name: appendMakefile to target branch and appendMakefile
       run: |
-        git reset ${{ github.event.inputs.branch }}
-        git add appendMakefile # preserve appendMakefile
-        git restore . # discard old changes
-        # appendMakefile
-        cat appendMakefile >> Makefile
+        curl https://raw.githubusercontent.com/kaovilai/oadp-operator/edge/appendMakefile >> Makefile
         echo "HEAD" > /tmp/rev-parse-head
         echo "${{ github.event.inputs.branch }}" > /tmp/tag
       if: ${{ github.event_name != 'push' }}
-    # - name: Append edge appendMakefile content to non-edge Makefile
-    #   run: |
-    #     # add non conflicting files from edge branch
-    #     curl https://raw.githubusercontent.com/kaovilai/oadp-operator/edge/appendMakefile >> Makefile
-    #     echo "HEAD" > /tmp/rev-parse-head
-    #   if: ${{ github.ref != 'refs/heads/edge' }}
     - run: cat Makefile
     - name: get git ref
       id: git-ref
