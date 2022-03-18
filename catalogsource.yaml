@@ -2,7 +2,7 @@ apiVersion: operators.coreos.com/v1alpha1
 kind: CatalogSource
 metadata:
   name: oadp-edge
-  namespace: operator
+  namespace: default
 spec:
   sourceType: grpc
   image: ghcr.io/kaovilai/oadp-operator-catalog:edge
