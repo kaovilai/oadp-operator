@@ -130,14 +130,14 @@ jobs:
         registry: ${{ env.REGISTRY }}
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
-    - name: check ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.git-ref.outputs.GIT_REF }} can be pulled
+    - name: check ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.git-ref.outputs.GIT_REF }} can be pulled
       id: catalog-git-ref-exist
       continue-on-error: true
-      run: docker pull ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.git-ref.outputs.GIT_REF }}
-    - name: check ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }} can be pulled
+      run: docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.git-ref.outputs.GIT_REF }}
+    - name: check ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }} can be pulled
       id: catalog-build-tag-exist
       continue-on-error: true
-      run: docker pull ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }}
+      run: docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }}
     # Extract metadata (tags, labels) for Docker
     # https://github.com/docker/metadata-action
     - name: Extract Docker metadata
@@ -267,37 +267,24 @@ jobs:
     - name: add bundle to git ref catalog build and push
       if: ${{ steps.catalog-git-ref-exist.outcome != 'success' }}
       run: |
-        CATALOG_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.git-ref.outputs.GIT_REF }} \
-        BUNDLE_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.git-ref.outputs.GIT_REF }} \
+        CATALOG_IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.git-ref.outputs.GIT_REF }} \
+        BUNDLE_IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.git-ref.outputs.GIT_REF }} \
         make catalog-build catalog-push
     - name: add bundle to ${{ steps.build-tag.outputs.BUILD_TAG }} existing catalog build and push
       if: ${{ steps.catalog-build-tag-exist.outcome == 'success' && steps.catalog-build-tag-exist.outcome != 'success' }}
       id: add-to-existing-catalog
       continue-on-error: true
       run: |
-        CATALOG_BASE_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }} \
-        CATALOG_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }} \
-        BUNDLE_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.git-ref.outputs.GIT_REF }} \
+        CATALOG_BASE_IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }} \
+        CATALOG_IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }} \
+        BUNDLE_IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.git-ref.outputs.GIT_REF }} \
         make catalog-build-replaces catalog-push
     - name: if existing fail, add bundle to new ${{ steps.build-tag.outputs.BUILD_TAG }} catalog build and push
       if: ${{ steps.catalog-build-tag-exist.outcome != 'success'}}
       run: |
-        CATALOG_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }} \
-        BUNDLE_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.git-ref.outputs.GIT_REF }} \
+        CATALOG_IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }} \
+        BUNDLE_IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.git-ref.outputs.GIT_REF }} \
         make catalog-build-replaces catalog-push
-    # - name: add bundle to catalog
-    #   run: opm render ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.git-ref.outputs.GIT_REF }} --output yaml >> catalog-blocks/render.yaml
-    # - name: add bundle to edge channel entry
-    #   run: |
-    #     echo "" >> catalog-blocks/edge-entries.yaml
-    # - name: cat catalog
-    #   run: cat catalog/operator.yaml
-    # - name: ls
-    #   run: ls catalog/
-    # - name: opm validate
-    #   run: opm validate catalog/
-    # - name: cat resulting
-    #   run: cat catalog/operator.yaml
     - name: git add
       run: git add .
     - name: git status
