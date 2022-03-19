@@ -25,7 +25,7 @@ env:
 jobs:
   publish-new-edge-catalog:
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'push' || github.event_name == 'schedule' || github.event.inputs.branch != 'edge' && github.event.inputs.branch != '' }}
+    if: ${{ github.event_name == 'push' || github.event_name == 'schedule' || github.event.inputs.branch != github.event_name && github.event.inputs.branch != '' }}
     permissions:
       contents: read
       packages: write
