@@ -271,7 +271,7 @@ jobs:
         BUNDLE_IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.git-ref.outputs.GIT_REF }} \
         make catalog-build catalog-push
     - name: add bundle to ${{ steps.build-tag.outputs.BUILD_TAG }} existing catalog build and push
-      if: ${{ steps.catalog-build-tag-exist.outcome == 'success' && steps.catalog-build-tag-exist.outcome != 'success' }}
+      if: ${{ steps.catalog-build-tag-exist.outcome == 'success' }}
       id: add-to-existing-catalog
       continue-on-error: true
       run: |
