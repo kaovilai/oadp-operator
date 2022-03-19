@@ -57,6 +57,8 @@ jobs:
         git remote -vv
         git remote add upstream https://github.com/openshift/oadp-operator.git
         git fetch upstream
+    - name: Reset to upstream/master
+      run: |
         git reset upstream/master
         git add appendMakefile # preserve appendMakefile
         git restore . # discard old changes
@@ -301,4 +303,4 @@ jobs:
     - name: git status
       run: git status
     - name: git diff
-      run: git diff
+      run: git diff upstream/master
