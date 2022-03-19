@@ -52,6 +52,11 @@ jobs:
       continue-on-error: true
     - uses: actions/checkout@v2
       if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
+    - name: checkout target branch
+      uses: actions/checkout@v2
+      with:
+        ref: ${{ github.event.inputs.branch }}
+      if: ${{ github.event_name != 'push' }}
     - name: Get upstream/master
       run: |
         git remote -vv
@@ -67,11 +72,6 @@ jobs:
         echo "upstream/master" > /tmp/rev-parse-head
         echo "${{ github.ref_name }}" > /tmp/tag
       if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
-    - name: checkout target branch
-      uses: actions/checkout@v2
-      with:
-        ref: ${{ github.event.inputs.branch }}
-      if: ${{ github.event_name != 'push' }}
     - name: appendMakefile to target branch and appendMakefile
       run: |
         curl https://raw.githubusercontent.com/kaovilai/oadp-operator/edge/Tiger_passant_guardant.svg > Tiger_passant_guardant.svg
