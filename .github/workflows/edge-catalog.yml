@@ -78,7 +78,7 @@ jobs:
         curl https://raw.githubusercontent.com/kaovilai/oadp-operator/edge/appendMakefile >> Makefile
         echo "HEAD" > /tmp/rev-parse-head
         echo "${{ github.event.inputs.branch }}" > /tmp/tag
-      if: ${{ github.event_name != 'push' }}
+      if: ${{ github.event_name != 'push' && github.event_name != 'schedule'}}
     - run: cat Makefile
     - name: get git ref
       id: git-ref
