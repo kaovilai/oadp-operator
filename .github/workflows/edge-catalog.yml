@@ -25,7 +25,7 @@ env:
 jobs:
   publish-new-edge-catalog:
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'push' || github.event_name == 'schedule' || github.event.inputs.branch != github.event_name && github.event.inputs.branch != '' }}
+    if: ${{ github.event_name == 'push' || github.event_name == 'schedule' || github.event.inputs.branch != github.ref_name && github.event.inputs.branch != '' }}
     permissions:
       contents: read
       packages: write
@@ -65,7 +65,7 @@ jobs:
         # appendMakefile
         cat appendMakefile >> Makefile
         echo "upstream/master" > /tmp/rev-parse-head
-        echo "edge" > /tmp/tag
+        echo "${{ github.ref_name }}" > /tmp/tag
       if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
     - name: checkout target branch
       uses: actions/checkout@v2
