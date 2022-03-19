@@ -23,9 +23,9 @@ env:
   # github.repository as <account>/<repo>
   IMAGE_NAME: ${{ github.repository }}
 jobs:
-  publish-new-edge-catalog: #test and submit coverage to codecov on pushes
+  publish-new-edge-catalog:
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'push' || github.event.inputs.branch != 'edge' && github.event.inputs.branch != '' }}
+    if: ${{ github.event_name == 'push' || github.event_name == 'schedule' || github.event.inputs.branch != 'edge' && github.event.inputs.branch != '' }}
     permissions:
       contents: read
       packages: write
@@ -51,7 +51,7 @@ jobs:
       # Ignore the failure of a step and avoid terminating the job.
       continue-on-error: true
     - uses: actions/checkout@v2
-      if: ${{ github.event_name == 'push' }}
+      if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
     - name: Get upstream/master
       run: |
         git remote -vv
@@ -64,7 +64,7 @@ jobs:
         cat appendMakefile >> Makefile
         echo "upstream/master" > /tmp/rev-parse-head
         echo "edge" > /tmp/tag
-      if: ${{ github.event_name == 'push' }}
+      if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
     - name: checkout target branch
       uses: actions/checkout@v2
       with:
@@ -128,82 +128,148 @@ jobs:
         registry: ${{ env.REGISTRY }}
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
+    - name: check ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.git-ref.outputs.GIT_REF }} can be pulled
+      id: catalog-git-ref-exist
+      continue-on-error: true
+      run: docker pull ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.git-ref.outputs.GIT_REF }}
+    - name: check ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }} can be pulled
+      id: catalog-build-tag-exist
+      continue-on-error: true
+      run: docker pull ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }}
     # Extract metadata (tags, labels) for Docker
     # https://github.com/docker/metadata-action
     - name: Extract Docker metadata
-      id: meta
+      id: meta-git-ref
+      if: ${{ steps.catalog-git-ref-exist.outcome != 'success' }}
       uses: docker/metadata-action@98669ae865ea3cffbcbaa878cf57c20bbf1c6c38
       with:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         tags: |
           type=raw,value=${{ steps.git-ref.outputs.GIT_REF }}
+    - name: Extract Docker metadata
+      id: meta-build-tag
+      if: ${{ steps.catalog-build-tag-exist.outcome != 'success' }}
+      uses: docker/metadata-action@98669ae865ea3cffbcbaa878cf57c20bbf1c6c38
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
           type=raw,value=${{ steps.build-tag.outputs.BUILD_TAG }}
     # Build and push Docker image with Buildx (don't push on PR)
     # https://github.com/docker/build-push-action
     - name: Build and push Docker image
-      id: build-and-push
+      id: build-and-push-git-ref
+      if: ${{ steps.catalog-git-ref-exist.outcome != 'success' }}
       uses: docker/build-push-action@ad44023a93711e3deb337508980b4b5e9bcdc5dc
       with:
         context: .
         push: ${{ github.event_name != 'pull_request' }}
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
+        tags: ${{ steps.meta-git-ref.outputs.tags }}
+        labels: ${{ steps.meta-git-ref.outputs.labels }}
+    # Build and push Docker image with Buildx (don't push on PR)
+    # https://github.com/docker/build-push-action
+    - name: Build and push Docker image
+      id: build-and-push-build-tag
+      if: ${{ steps.catalog-build-tag-exist.outcome != 'success' }}
+      uses: docker/build-push-action@ad44023a93711e3deb337508980b4b5e9bcdc5dc
+      with:
+        context: .
+        push: ${{ github.event_name != 'pull_request' }}
+        tags: ${{ steps.meta-build-tag.outputs.tags }}
+        labels: ${{ steps.meta-build-tag.outputs.labels }}
     # Sign the resulting Docker image digest except on PRs.
     # This will only write to the public Rekor transparency log when the Docker
     # repository is public to avoid leaking data.  If you would like to publish
     # transparency data even for private images, pass --force to cosign below.
     # https://github.com/sigstore/cosign
     - name: Sign the published Docker image
-      if: ${{ github.event_name != 'pull_request' }}
+      if: ${{ github.event_name != 'pull_request' && steps.catalog-git-ref-exist.outcome != 'success' }}
       env:
         COSIGN_EXPERIMENTAL: "true"
       # This step uses the identity token to provision an ephemeral certificate
       # against the sigstore community Fulcio instance.
-      run: cosign sign ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }}
+      run: cosign sign ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push-git-ref.outputs.digest }}
+    - name: Sign the published Docker image
+      if: ${{ github.event_name != 'pull_request' && steps.catalog-build-tag-exist.outcome != 'success' }}
+      env:
+        COSIGN_EXPERIMENTAL: "true"
+      # This step uses the identity token to provision an ephemeral certificate
+      # against the sigstore community Fulcio instance.
+      run: cosign sign ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push-build-tag.outputs.digest }}
     - name: make bundle
-      run: CHANNELS=${{ steps.build-tag.outputs.BUILD_TAG }},${{ steps.git-ref.outputs.GIT_REF }} VERSION=0.99.${{ steps.dateversion.outputs.YMdHM }} IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }} make replace-icon bundle
+      if: ${{ steps.catalog-git-ref-exist.outcome != 'success' }}
+      run: CHANNELS=${{ steps.build-tag.outputs.BUILD_TAG }},${{ steps.git-ref.outputs.GIT_REF }} VERSION=0.99.${{ steps.dateversion.outputs.YMdHM }} IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push-git-ref.outputs.digest }} make replace-icon bundle
     - name: Extract Docker metadata
-      id: meta-bundle
+      id: meta-bundle-git-ref
+      if: ${{ steps.catalog-git-ref-exist.outcome != 'success' }}
       uses: docker/metadata-action@98669ae865ea3cffbcbaa878cf57c20bbf1c6c38
       with:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle
         tags: |
           type=raw,value=${{ steps.git-ref.outputs.GIT_REF }}
+    - name: Extract Docker metadata
+      id: meta-bundle-build-tag
+      if: ${{ steps.catalog-build-tag-exist.outcome != 'success' }}
+      uses: docker/metadata-action@98669ae865ea3cffbcbaa878cf57c20bbf1c6c38
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle
+        tags: |
           type=raw,value=${{ steps.build-tag.outputs.BUILD_TAG }}
     # Build and push Docker image with Buildx (don't push on PR)
     # https://github.com/docker/build-push-action
     - name: Build and push Docker image
-      id: build-and-push-bundle
+      id: build-and-push-bundle-git-ref
+      if: ${{ steps.catalog-git-ref-exist.outcome != 'success' }}
       uses: docker/build-push-action@ad44023a93711e3deb337508980b4b5e9bcdc5dc
       with:
         file: bundle.Dockerfile
         context: .
         push: ${{ github.event_name != 'pull_request' }}
-        tags: ${{ steps.meta-bundle.outputs.tags }}
-        labels: ${{ steps.meta-bundle.outputs.labels }}
+        tags: ${{ steps.meta-bundle-git-ref.outputs.tags }}
+        labels: ${{ steps.meta-bundle-git-ref.outputs.labels }}
+    # Build and push Docker image with Buildx (don't push on PR)
+    # https://github.com/docker/build-push-action
+    - name: Build and push Docker image
+      id: build-and-push-bundle-build-tag
+      if: ${{ steps.catalog-build-tag-exist.outcome != 'success' }}
+      uses: docker/build-push-action@ad44023a93711e3deb337508980b4b5e9bcdc5dc
+      with:
+        file: bundle.Dockerfile
+        context: .
+        push: ${{ github.event_name != 'pull_request' }}
+        tags: ${{ steps.meta-bundle-build-tag.outputs.tags }}
+        labels: ${{ steps.meta-bundle-build-tag.outputs.labels }}
     # Sign the resulting Docker image digest except on PRs.
     # This will only write to the public Rekor transparency log when the Docker
     # repository is public to avoid leaking data.  If you would like to publish
     # transparency data even for private images, pass --force to cosign below.
     # https://github.com/sigstore/cosign
     - name: Sign the published Docker image
-      if: ${{ github.event_name != 'pull_request' }}
+      if: ${{ github.event_name != 'pull_request' && steps.catalog-git-ref-exist.outcome != 'success' }}
       env:
         COSIGN_EXPERIMENTAL: "true"
       # This step uses the identity token to provision an ephemeral certificate
       # against the sigstore community Fulcio instance.
-      run: cosign sign ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle@${{ steps.build-and-push-bundle.outputs.digest }}
+      run: cosign sign ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle@${{ steps.build-and-push-bundle-git-ref.outputs.digest }}
+    # Sign the resulting Docker image digest except on PRs.
+    # This will only write to the public Rekor transparency log when the Docker
+    # repository is public to avoid leaking data.  If you would like to publish
+    # transparency data even for private images, pass --force to cosign below.
+    # https://github.com/sigstore/cosign
+    - name: Sign the published Docker image
+      if: ${{ github.event_name != 'pull_request' && steps.catalog-build-tag-exist.outcome != 'success'}}
+      env:
+        COSIGN_EXPERIMENTAL: "true"
+      # This step uses the identity token to provision an ephemeral certificate
+      # against the sigstore community Fulcio instance.
+      run: cosign sign ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle@${{ steps.build-and-push-bundle-build-tag.outputs.digest }}
     - name: add bundle to git ref catalog build and push
+      if: ${{ steps.catalog-git-ref-exist.outcome != 'success' }}
       run: |
         CATALOG_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.git-ref.outputs.GIT_REF }} \
         BUNDLE_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.git-ref.outputs.GIT_REF }} \
         make catalog-build catalog-push
-    - name: check ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }} can be pulled
-      id: catalog-exist
-      continue-on-error: true
-      run: docker pull ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }}
     - name: add bundle to ${{ steps.build-tag.outputs.BUILD_TAG }} existing catalog build and push
-      if: ${{ steps.catalog-exist.outcome == 'success' }}
+      if: ${{ steps.catalog-build-tag-exist.outcome == 'success' && steps.catalog-build-tag-exist.outcome != 'success' }}
       id: add-to-existing-catalog
       continue-on-error: true
       run: |
@@ -212,7 +278,7 @@ jobs:
         BUNDLE_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.git-ref.outputs.GIT_REF }} \
         make catalog-build-replaces catalog-push
     - name: if existing fail, add bundle to new ${{ steps.build-tag.outputs.BUILD_TAG }} catalog build and push
-      if: ${{ steps.catalog-exist.outcome != 'success'}}
+      if: ${{ steps.catalog-build-tag-exist.outcome != 'success'}}
       run: |
         CATALOG_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }} \
         BUNDLE_IMG=ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.git-ref.outputs.GIT_REF }} \
