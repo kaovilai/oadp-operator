@@ -6,7 +6,8 @@ on:
       - ".github/workflows/edge-catalog.yml"
       - "appendMakefile"
   schedule:
-  - cron: '*/30 * * * *'
+  - cron: '30 1-22/3 * * *'
+  - cron: '0 0-21/3 * * *'
   workflow_dispatch:
     inputs:
       branch:
