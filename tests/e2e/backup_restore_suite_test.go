@@ -73,6 +73,36 @@ var _ = Describe("AWS backup restore tests", func() {
 		return nil
 	})
 
+	mySqlCSICase := BackupRestoreCase{
+			ApplicationTemplate:  "./sample-applications/mysql-persistent/mysql-persistent-csi-template.yaml",
+			ApplicationNamespace: "mysql-persistent",
+			Name:                 "mysql-e2e",
+			BackupRestoreType:    CSI,
+			PreBackupVerify:      mysqlReady,
+			PostRestoreVerify:    mysqlReady,
+	}
+
+	mySqlResticCase := mySqlCSICase
+	mySqlResticCase.BackupRestoreType = RESTIC
+	mySqlResticCase.ApplicationTemplate = "./sample-applications/mysql-persistent/mysql-persistent-template.yaml"
+
+	parksAppLess48Case := BackupRestoreCase{
+			ApplicationTemplate:  "./sample-applications/parks-app/manifest.yaml",
+			ApplicationNamespace: "parks-app",
+			Name:                 "parks-e2e",
+			BackupRestoreType:    RESTIC,
+			PreBackupVerify:      parksAppReady,
+			PostRestoreVerify:    parksAppReady,
+			MaxK8SVersion:        &K8sVersionOcp47,
+	}
+
+	parksApp48PlusCase := parksAppLess48Case
+	parksApp48PlusCase.MaxK8SVersion = nil
+	parksApp48PlusCase.MinK8SVersion = &K8sVersionOcp48
+	parksApp48PlusCase.ApplicationTemplate = "./sample-applications/parks-app/manifest4.8.yaml"
+
+
+
 	DescribeTable("backup and restore applications",
 		func(brCase BackupRestoreCase, expectedErr error) {
 			err := dpaCR.Build(brCase.BackupRestoreType)
@@ -95,10 +125,10 @@ var _ = Describe("AWS backup restore tests", func() {
 				err = InstallApplication(dpaCR.Client, "./sample-applications/gp2-csi/volumeSnapshotClass.yaml")
 				Expect(err).ToNot(HaveOccurred())
 			}
-
+			
 			if dpaCR.CustomResource.BackupImages() {
 				log.Printf("Waiting for registry pods to be running")
-				Eventually(AreRegistryDeploymentsAvailable(namespace), timeoutMultiplier*time.Minute*3, time.Second*5).Should(BeTrue())
+				Eventually(AreRegistryDeploymentsAvailable(namespace), timeoutMultiplier*time.Second*6, time.Second*5).Should(BeTrue())
 			}
 			if notVersionTarget, reason := NotServerVersionTarget(brCase.MinK8SVersion, brCase.MaxK8SVersion); notVersionTarget {
 				Skip(reason)
@@ -107,7 +137,7 @@ var _ = Describe("AWS backup restore tests", func() {
 			restoreUid, _ := uuid.NewUUID()
 			backupName := fmt.Sprintf("%s-%s", brCase.Name, backupUid.String())
 			restoreName := fmt.Sprintf("%s-%s", brCase.Name, restoreUid.String())
-
+			
 			// install app
 			lastInstallingApplicationNamespace = brCase.ApplicationNamespace
 			lastInstallTime = time.Now()
@@ -180,39 +210,9 @@ var _ = Describe("AWS backup restore tests", func() {
 			}
 
 		},
-		Entry("MySQL application CSI", Label("aws"), BackupRestoreCase{
-			ApplicationTemplate:  "./sample-applications/mysql-persistent/mysql-persistent-csi-template.yaml",
-			ApplicationNamespace: "mysql-persistent",
-			Name:                 "mysql-e2e",
-			BackupRestoreType:    CSI,
-			PreBackupVerify:      mysqlReady,
-			PostRestoreVerify:    mysqlReady,
-		}, nil),
-		Entry("Parks application <4.8.0", BackupRestoreCase{
-			ApplicationTemplate:  "./sample-applications/parks-app/manifest.yaml",
-			ApplicationNamespace: "parks-app",
-			Name:                 "parks-e2e",
-			BackupRestoreType:    RESTIC,
-			PreBackupVerify:      parksAppReady,
-			PostRestoreVerify:    parksAppReady,
-			MaxK8SVersion:        &K8sVersionOcp47,
-		}, nil),
-		Entry("MySQL application", BackupRestoreCase{
-			ApplicationTemplate:  "./sample-applications/mysql-persistent/mysql-persistent-template.yaml",
-			ApplicationNamespace: "mysql-persistent",
-			Name:                 "mysql-e2e",
-			BackupRestoreType:    RESTIC,
-			PreBackupVerify:      mysqlReady,
-			PostRestoreVerify:    mysqlReady,
-		}, nil),
-		Entry("Parks application >=4.8.0", BackupRestoreCase{
-			ApplicationTemplate:  "./sample-applications/parks-app/manifest4.8.yaml",
-			ApplicationNamespace: "parks-app",
-			Name:                 "parks-e2e",
-			BackupRestoreType:    RESTIC,
-			PreBackupVerify:      parksAppReady,
-			PostRestoreVerify:    parksAppReady,
-			MinK8SVersion:        &K8sVersionOcp48,
-		}, nil),
+		FEntry("MySQL application CSI", Label("aws"), mySqlCSICase, nil),
+		Entry("Parks application <4.8.0", parksAppLess48Case, nil),
+		Entry("MySQL application", mySqlResticCase, nil),
+		Entry("Parks application >=4.8.0", parksApp48PlusCase, nil),
 	)
 })
