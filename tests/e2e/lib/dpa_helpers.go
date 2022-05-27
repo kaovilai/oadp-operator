@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	buildv1 "github.com/openshift/api/build/v1"
 	"github.com/openshift/oadp-operator/pkg/common"
 
@@ -41,8 +42,6 @@ const (
 	CSI    BackupRestoreType = "csi"
 	RESTIC BackupRestoreType = "restic"
 )
-
-var backupLocations []oadpv1alpha1.BackupLocation
 
 type DpaCustomResource struct {
 	Name              string
@@ -313,9 +312,7 @@ func GetVeleroPods(namespace string) (*corev1.PodList, error) {
 	return podList, nil
 }
 
-var lastObservedReadyVeleroDeployment *kappsv1.Deployment
-
-func AreVeleroDeploymentReplicasReady(namespace string) wait.ConditionFunc {
+func AreVeleroDeploymentReplicasReady(namespace string, desiredSpec corev1.PodSpec) wait.ConditionFunc {
 	return func() (bool, error) {
 		deployment, err := GetVeleroDeployment(namespace)
 		if err != nil {
@@ -331,17 +328,50 @@ func AreVeleroDeploymentReplicasReady(namespace string) wait.ConditionFunc {
 			log.Printf("deployment has conditions: %v", deployment.Status.Conditions)
 			return false, nil
 		}
-		if lastObservedReadyVeleroDeployment != nil &&
-			lastObservedReadyVeleroDeployment.CreationTimestamp.Equal(&deployment.CreationTimestamp) && // same deployment, not recreated
-			!reflect.DeepEqual(lastObservedReadyVeleroDeployment.Spec, deployment.Spec) &&
-			lastObservedReadyVeleroDeployment.Status.ObservedGeneration == deployment.Status.ObservedGeneration {
-			// wait for observed generation to change
-			log.Print("deployment spec has changed, waiting for observed generation to change")
-			return false, nil
+		// at this point we know that the deployment has the desired number of replicas. check that the pods have the desired spec
+		// get replicaset for deployment
+		replicasets, err := GetReplicasetsForDeployment(namespace, deployment.Name)
+		if err != nil {
+			return false, err
 		}
-		lastObservedReadyVeleroDeployment = deployment.DeepCopy()
+		
+		podList, err := GetVeleroPods(namespace)
+		if err != nil {
+			return false, err
+		}
+		for _, pod := range podList.Items {
+			for _, owner := range pod.OwnerReferences {
+				for _, replicaset := range replicasets {
+					for _, rOwner := range replicaset.OwnerReferences {
+						if rOwner.UID == deployment.UID && // check that the replicaset is owned by the deployment
+						 owner.UID == replicaset.UID && // check that the pod is owned by the replicaset
+						  !reflect.DeepEqual(pod.Spec, desiredSpec) { // check that the pod spec is the desired spec
+							log.Printf("pod: %s does not have desired spec: %v", pod.Name, pod.Spec)
+							log.Printf(cmp.Diff(pod.Spec, desiredSpec))
+							return false, nil
+						}
+					}
+				}
+			}
+		}
 		return true, nil
 	}
+}
+
+func GetReplicasetsForDeployment(namespace, name string) ([]kappsv1.ReplicaSet, error) {
+	clientset, err := setUpClient()
+	if err != nil {
+		return nil, err
+	}
+	// get replicaset for deployment
+	replicasetList, err := clientset.AppsV1().ReplicaSets(namespace).List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	if len(replicasetList.Items) == 0 {
+		return nil, errors.New("no replicasets found for deployment: " + name)
+	}
+	return replicasetList.Items, nil
 }
 
 // Returns logs from velero container on velero pod

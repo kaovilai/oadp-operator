@@ -2,6 +2,7 @@ package lib
 
 import (
 	"context"
+	"fmt"
 	"log"
 
 	corev1 "k8s.io/api/core/v1"
@@ -206,5 +207,24 @@ func isCredentialsSecretDeleted(namespace string, credSecretRef string) wait.Con
 		}
 		log.Printf("Secret still exists in namespace")
 		return false, err
+	}
+}
+
+func matchLabelsMapToStringArray(labels map[string]string) []string {
+	var labelArray []string
+	for key, value := range labels {
+		labelArray = append(labelArray, fmt.Sprintf("%s=%s", key, value))
+	}
+	return labelArray
+}
+
+type PodSpecOption func (*corev1.PodSpec) error
+
+func WithAdditionalContainerEnv(env []corev1.EnvVar) PodSpecOption {
+	return func(podSpec *corev1.PodSpec) error {
+		for i := range podSpec.Containers {
+			podSpec.Containers[i].Env = append(podSpec.Containers[0].Env, env...)
+		}
+		return nil
 	}
 }
