@@ -6,8 +6,12 @@ import (
 	"reflect"
 
 	oadpv1alpha1 "github.com/openshift/oadp-operator/api/v1alpha1"
+	"github.com/openshift/oadp-operator/controllers"
+	"github.com/openshift/oadp-operator/pkg/common"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/utils/pointer"
@@ -47,9 +51,7 @@ func HasCorrectNumResticPods(namespace string) wait.ConditionFunc {
 	}
 }
 
-var lastObservedReadyResticDaemeonSet *appsv1.DaemonSet
-
-func AreResticDaemonsetUpdatedAndReady(namespace string) wait.ConditionFunc {
+func AreResticDaemonsetUpdatedAndReady(namespace string, desiredSpec corev1.PodSpec) wait.ConditionFunc {
 	log.Printf("Checking if Restic daemonset is ready...")
 	return func() (bool, error) {
 		rds, err := GetResticDaemonSet(namespace, "restic")
@@ -61,15 +63,28 @@ func AreResticDaemonsetUpdatedAndReady(namespace string) wait.ConditionFunc {
 			log.Printf("Restic daemonset is not ready with condition: %v", rds.Status.Conditions)
 			return false, nil
 		}
-		if lastObservedReadyResticDaemeonSet != nil &&
-			lastObservedReadyResticDaemeonSet.CreationTimestamp.Equal(&rds.CreationTimestamp) && // same object
-			!reflect.DeepEqual(lastObservedReadyResticDaemeonSet.Spec, rds.Spec) &&
-			// if spec is not deep equal, something updated. Consider ready only if observedGeneration has increased.
-			rds.Status.ObservedGeneration == lastObservedReadyResticDaemeonSet.Status.ObservedGeneration {
-			log.Printf("daemonset spec has changed, waiting for observed generation to change")
-			return false, nil
+		clientset, err := setUpClient()
+		if err != nil {
+			return false, err
 		}
-		lastObservedReadyResticDaemeonSet = rds.DeepCopy()
+		// at this point we know that Restic daemonset is ready, now we check if it's ready with desired spec.
+		labelSelectors := matchLabelsMapToStringArray(rds.Spec.Selector.MatchLabels)
+		var podList *corev1.PodList
+		if podList, err = clientset.CoreV1().Pods(namespace).List(context.TODO(), metav1.ListOptions{
+			LabelSelector: labelSelectors[0],
+		}); err != nil {
+			return false, err
+		}
+		for _, pod := range podList.Items {
+			// if pod is owned by Restic daemonset
+			for _, owner := range pod.GetOwnerReferences() {
+				if owner.UID == rds.UID && !reflect.DeepEqual(pod.Spec, desiredSpec) {
+					log.Printf("Pod %s is not ready with desired spec", pod.Name)
+					return false, nil
+				}
+			}
+		}
+
 		return true, nil
 	}
 }
@@ -186,4 +201,114 @@ func GetResticDaemonsetList(namespace string) (*appsv1.DaemonSetList, error) {
 		return nil, err
 	}
 	return deploymentList, nil
+}
+var mountPropagationToHostContainer = corev1.MountPropagationHostToContainer
+func ResticPodSpec(namespace string, opts ...PodSpecOption) (corev1.PodSpec, error) {
+	spec := resticPodSpec()
+	for _, opt := range opts {
+		err := opt(&spec)
+		if err != nil {
+			return corev1.PodSpec{}, err
+		}
+	}
+	return spec, nil
+}
+
+func resticPodSpec() corev1.PodSpec {
+	return corev1.PodSpec{
+		NodeSelector:       dpa.Spec.Configuration.Restic.PodConfig.NodeSelector,
+		ServiceAccountName: common.Velero,
+		SecurityContext: &corev1.PodSecurityContext{
+			RunAsUser:          pointer.Int64(0),
+			SupplementalGroups: dpa.Spec.Configuration.Restic.SupplementalGroups,
+		},
+		Volumes: []corev1.Volume{
+			// Cloud Provider volumes are dynamically added in the for loop below
+			{
+				Name: controllers.HostPods,
+				VolumeSource: corev1.VolumeSource{
+					HostPath: &corev1.HostPathVolumeSource{
+						Path: "/var/lib/kubelet/pods",
+					},
+				},
+			},
+			{
+				Name: "scratch",
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{},
+				},
+			},
+			{
+				Name: "certs",
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{},
+				},
+			},
+		},
+		Tolerations: dpa.Spec.Configuration.Restic.PodConfig.Tolerations,
+		Containers: []corev1.Container{
+			{
+				Name: common.Restic,
+				SecurityContext: &corev1.SecurityContext{
+					Privileged: pointer.Bool(true),
+				},
+				Image:           common.VeleroImage,
+				ImagePullPolicy: corev1.PullAlways,
+				Command: []string{
+					"/velero",
+				},
+				Args: []string{
+					"restic",
+					"server",
+				},
+				VolumeMounts: []corev1.VolumeMount{
+					{
+						Name:             "host-pods",
+						MountPath:        "/host_pods",
+						MountPropagation: &mountPropagationToHostContainer,
+					},
+					{
+						Name:      "scratch",
+						MountPath: "/scratch",
+					},
+					{
+						Name:      "certs",
+						MountPath: "/etc/ssl/certs",
+					},
+				},
+				Resources: corev1.ResourceRequirements{
+					Limits: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("1"),
+						corev1.ResourceMemory: resource.MustParse("512Mi"),
+					},
+					Requests: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("500m"),
+						corev1.ResourceMemory: resource.MustParse("128Mi"),
+					},
+				},
+				Env: []corev1.EnvVar{
+					{
+						Name: "NODE_NAME",
+						ValueFrom: &corev1.EnvVarSource{
+							FieldRef: &corev1.ObjectFieldSelector{
+								FieldPath: "spec.nodeName",
+							},
+						},
+					},
+					{
+						Name: "VELERO_NAMESPACE",
+						ValueFrom: &corev1.EnvVarSource{
+							FieldRef: &corev1.ObjectFieldSelector{
+								FieldPath: "metadata.namespace",
+							},
+						},
+					},
+					{
+						Name:  "VELERO_SCRATCH_DIR",
+						Value: "/scratch",
+					},
+				},
+			},
+		},
+	}
 }
