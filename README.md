@@ -1,4 +1,5 @@
 [![edge-catalog](https://github.com/kaovilai/oadp-operator/actions/workflows/edge-catalog.yml/badge.svg)](https://github.com/kaovilai/oadp-operator/actions/workflows/edge-catalog.yml)
+
 Catalog source for installing latest commits from [OADP Operator](https://github.com/openshift/oadp-operator). Not supported.
 
 Install catalogsource
