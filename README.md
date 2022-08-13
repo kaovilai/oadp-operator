@@ -32,9 +32,6 @@ Available catalog tags:
 - `edge` receive automatic updates (hopefully).
 - `$(git rev-parse upstream/master)` pin to a specific upstream/master commit.
 
-GitHub Actions is set to refresh available images every 30 minutes.
-Star this repo to trigger a refresh.
-
 Version numbering:
 0.99.YYYYMMDDHHMM, year month date hour minutes (UTC)
 
