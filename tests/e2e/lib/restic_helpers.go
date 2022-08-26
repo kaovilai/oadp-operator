@@ -119,8 +119,8 @@ func (v *DpaCustomResource) DisableRestic(namespace string, instanceName string)
 	}
 	dpa := &oadpv1alpha1.DataProtectionApplication{}
 	err = v.Client.Get(context.Background(), client.ObjectKey{
-		Namespace: v.Namespace,
-		Name:      v.Name,
+		Namespace: v.Namespace(),
+		Name:      v.Name(),
 	}, dpa)
 	if err != nil {
 		return err
@@ -142,8 +142,8 @@ func (v *DpaCustomResource) EnableResticNodeSelector(namespace string, s3Bucket 
 	}
 	dpa := &oadpv1alpha1.DataProtectionApplication{}
 	err = v.Client.Get(context.Background(), client.ObjectKey{
-		Namespace: v.Namespace,
-		Name:      v.Name,
+		Namespace: v.Namespace(),
+		Name:      v.Name(),
 	}, dpa)
 	if err != nil {
 		return err

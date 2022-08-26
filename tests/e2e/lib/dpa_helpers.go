@@ -43,12 +43,19 @@ const (
 )
 
 type DpaCustomResource struct {
-	Name              string
-	Namespace         string
+	name              string
+	namespace         string
 	backupRestoreType BackupRestoreType
 	CustomResource    *oadpv1alpha1.DataProtectionApplication
 	Client            client.Client
 	Provider          string
+}
+
+func (v *DpaCustomResource) Name() string {
+	return v.name
+}
+func (v *DpaCustomResource) Namespace() string {
+	return v.namespace
 }
 
 var VeleroPrefix = "velero-e2e-" + string(uuid.NewUUID())
@@ -58,8 +65,8 @@ func (v *DpaCustomResource) Build(backupRestoreType BackupRestoreType) error {
 	// Velero Instance creation spec with backupstorage location default to AWS. Would need to parameterize this later on to support multiple plugins.
 	dpaInstance := oadpv1alpha1.DataProtectionApplication{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      v.Name,
-			Namespace: v.Namespace,
+			Name:      v.Name(),
+			Namespace: v.Namespace(),
 		},
 		Spec: oadpv1alpha1.DataProtectionApplicationSpec{
 			Configuration: &oadpv1alpha1.ApplicationConfig{
@@ -149,8 +156,8 @@ func (v *DpaCustomResource) Get() (*oadpv1alpha1.DataProtectionApplication, erro
 	}
 	vel := oadpv1alpha1.DataProtectionApplication{}
 	err = v.Client.Get(context.Background(), client.ObjectKey{
-		Namespace: v.Namespace,
-		Name:      v.Name,
+		Namespace: v.Namespace(),
+		Name:      v.Name(),
 	}, &vel)
 	if err != nil {
 		return nil, err
@@ -329,8 +336,8 @@ func (v *DpaCustomResource) IsDeleted() wait.ConditionFunc {
 		// Check for velero CR in cluster
 		vel := oadpv1alpha1.DataProtectionApplication{}
 		err = v.Client.Get(context.Background(), client.ObjectKey{
-			Namespace: v.Namespace,
-			Name:      v.Name,
+			Namespace: v.Namespace(),
+			Name:      v.Name(),
 		}, &vel)
 		if apierrors.IsNotFound(err) {
 			return true, nil

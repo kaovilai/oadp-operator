@@ -92,7 +92,7 @@ var _ = BeforeSuite(func() {
 	}
 
 	dpaCR = &DpaCustomResource{
-		Namespace: namespace,
+		namespace: namespace,
 		Provider:  provider,
 	}
 	dpaCR.CustomResource = Dpa
@@ -132,6 +132,12 @@ var _ = AfterSuite(func() {
 	Expect(err).ToNot(HaveOccurred())
 	err = DeleteSecret(namespace, "bsl-cloud-credentials-"+provider+"-with-carriage-return")
 	Expect(err).ToNot(HaveOccurred())
+	if dpaCR.CustomResource.Name == "" {
+		dpaCR.CustomResource.Name = dpaCR.Name()
+	}
+	if dpaCR.CustomResource.Namespace == "" {
+		dpaCR.CustomResource.Namespace = dpaCR.Namespace()
+	}
 	err = dpaCR.Delete()
 	Expect(err).ToNot(HaveOccurred())
 	Eventually(dpaCR.IsDeleted(), timeoutMultiplier*time.Minute*2, time.Second*5).Should(BeTrue())

@@ -567,7 +567,7 @@ var _ = Describe("Configuration testing for DPA Custom Resource", func() {
 					}
 				}
 			}
-			lastInstallingApplicationNamespace = dpaCR.Namespace
+			lastInstallingApplicationNamespace = dpaCR.Namespace()
 			lastInstallTime = time.Now()
 			err = dpaCR.CreateOrUpdate(installCase.DpaSpec)
 			Expect(err).ToNot(HaveOccurred())

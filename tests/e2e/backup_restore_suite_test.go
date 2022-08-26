@@ -54,11 +54,6 @@ func mysqlReady(preBackupState bool, backupRestoreType BackupRestoreType) Verifi
 
 var _ = Describe("AWS backup restore tests", func() {
 
-	var _ = BeforeEach(func() {
-		testSuiteInstanceName := "ts-" + instanceName
-		dpaCR.Name = testSuiteInstanceName
-	})
-
 	var lastInstallingApplicationNamespace string
 	var lastInstallTime time.Time
 	var _ = ReportAfterEach(func(report SpecReport) {
@@ -79,15 +74,17 @@ var _ = Describe("AWS backup restore tests", func() {
 			GinkgoWriter.Println("End of velero deployment pod logs")
 		}
 		// remove app namespace if leftover (likely previously failed before reaching uninstall applications) to clear items such as PVCs which are immutable so that next test can create new ones
-		err := dpaCR.Client.Delete(context.Background(), &corev1.Namespace{ObjectMeta: v1.ObjectMeta{
-			Name: lastInstallingApplicationNamespace,
-			Namespace: lastInstallingApplicationNamespace,
-		}}, &client.DeleteOptions{})
-		if k8serror.IsNotFound(err) {
-			err = nil
+		if lastInstallingApplicationNamespace != dpaCR.Namespace() { // do not remove app namespace if it is openshift-adp.
+			err := dpaCR.Client.Delete(context.Background(), &corev1.Namespace{ObjectMeta: v1.ObjectMeta{
+				Name: lastInstallingApplicationNamespace,
+				Namespace: lastInstallingApplicationNamespace,
+			}}, &client.DeleteOptions{})
+			if k8serror.IsNotFound(err) {
+				err = nil
+			}
+			Expect(err).ToNot(HaveOccurred())
 		}
-		Expect(err).ToNot(HaveOccurred())
-		err = dpaCR.Delete()
+		err := dpaCR.Delete()
 		Expect(err).ToNot(HaveOccurred())
 	})
 
@@ -125,7 +122,7 @@ var _ = Describe("AWS backup restore tests", func() {
 			err := dpaCR.Build(brCase.BackupRestoreType)
 			Expect(err).NotTo(HaveOccurred())
 
-			updateLastInstallingNamespace(dpaCR.Namespace)
+			updateLastInstallingNamespace(dpaCR.Namespace())
 
 			err = dpaCR.CreateOrUpdate(&dpaCR.CustomResource.Spec)
 			Expect(err).NotTo(HaveOccurred())

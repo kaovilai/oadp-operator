@@ -24,9 +24,6 @@ var _ = Describe("Subscription Config Suite Test", func() {
 		err = dpaCR.Delete()
 		Expect(err).ToNot(HaveOccurred())
 		Eventually(dpaCR.IsDeleted(), timeoutMultiplier*time.Minute*2, time.Second*5).Should(BeTrue())
-
-		testSuiteInstanceName := "ts-" + instanceName
-		dpaCR.Name = testSuiteInstanceName
 	})
 
 	var _ = AfterEach(func() {
