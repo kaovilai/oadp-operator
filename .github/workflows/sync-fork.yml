@@ -10,23 +10,19 @@ jobs:
     permissions:
       contents: write
     runs-on: ubuntu-latest
-
+    strategy:
+      matrix:
+        - base: master
+          head: master
+        - base: oadp-1.1
+          head: oadp-1.1
+        - base: oadp-1.0
+          head: oadp-1.0
+      fail-fast: false
     steps:
       - uses: tgymnich/fork-sync@v1.6.3
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PERSONAL_TOKEN }}
           owner: openshift
-          base: master
-          head: master
-      - uses: tgymnich/fork-sync@v1.6.3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          owner: openshift
-          base: oadp-1.1
-          head: oadp-1.1
-      - uses: tgymnich/fork-sync@v1.6.3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          owner: openshift
-          base: oadp-1.0
-          head: oadp-1.0
+          base: ${{ matrix.base }}
+          head: ${{ matrix.head }}
