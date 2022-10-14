@@ -1,0 +1,32 @@
+name: Sync Fork
+
+on:
+  schedule:
+    - cron: '*/30 * * * *' # every 30 minutes
+  workflow_dispatch: # on button click
+
+jobs:
+  sync:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: tgymnich/fork-sync@v1.6.3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          owner: openshift
+          base: master
+          head: master
+      - uses: tgymnich/fork-sync@v1.6.3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          owner: openshift
+          base: oadp-1.1
+          head: oadp-1.1
+      - uses: tgymnich/fork-sync@v1.6.3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          owner: openshift
+          base: oadp-1.0
+          head: oadp-1.0
