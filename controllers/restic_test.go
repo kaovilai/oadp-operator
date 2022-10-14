@@ -2,11 +2,12 @@ package controllers
 
 import (
 	"context"
-	"fmt"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"os"
 	"reflect"
 	"testing"
+
+	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 
@@ -2144,6 +2145,27 @@ func TestDPAReconciler_buildResticDaemonset(t *testing.T) {
 				t.Errorf("DPAReconciler.buildResticDaemonset() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
+			if tt.args.dpa != nil && tt.want != nil {
+				setPodTemplateSpecDefaults(&tt.want.Spec.Template)
+				if len(tt.want.Spec.Template.Spec.Containers) > 0 {
+					setContainerDefaults(&tt.want.Spec.Template.Spec.Containers[0])
+				}
+				if tt.want.Spec.UpdateStrategy.Type == appsv1.RollingUpdateDaemonSetStrategyType {
+					tt.want.Spec.UpdateStrategy.RollingUpdate = &appsv1.RollingUpdateDaemonSet{
+						MaxUnavailable: &intstr.IntOrString{
+							Type:   intstr.Int,
+							IntVal: 1,
+						},
+						MaxSurge: &intstr.IntOrString{
+							Type:   intstr.Int,
+							IntVal: 0,
+						},
+					}
+				}
+				if tt.want.Spec.RevisionHistoryLimit == nil {
+					tt.want.Spec.RevisionHistoryLimit = pointer.Int32(10)
+				}
+			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("DPAReconciler.buildResticDaemonset() got = %v, want %v", got, tt.want)
 			}
@@ -2191,7 +2213,7 @@ func TestDPAReconciler_updateResticRestoreHelperCM(t *testing.T) {
 					},
 				},
 				Data: map[string]string{
-					"image": fmt.Sprintf("%v/%v/%v:%v", os.Getenv("REGISTRY"), os.Getenv("PROJECT"), os.Getenv("VELERO_RESTIC_RESTORE_HELPER_REPO"), os.Getenv("VELERO_RESTIC_RESTORE_HELPER_TAG")),
+					"image": os.Getenv("RELATED_IMAGE_VELERO_RESTIC_RESTORE_HELPER"),
 				},
 			},
 		},

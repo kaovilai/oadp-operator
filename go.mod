@@ -5,6 +5,7 @@ go 1.16
 require (
 	github.com/aws/aws-sdk-go v1.28.2
 	github.com/go-logr/logr v0.4.0
+	github.com/google/go-cmp v0.5.9
 	github.com/google/uuid v1.1.2
 	github.com/kubernetes-csi/external-snapshotter/client/v4 v4.0.0
 	github.com/onsi/ginkgo v1.16.4
@@ -14,6 +15,7 @@ require (
 	github.com/operator-framework/api v0.10.7
 	github.com/operator-framework/operator-lib v0.9.0
 	github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring v0.51.2
+	github.com/prometheus/client_golang v1.11.1 // indirect
 	github.com/sirupsen/logrus v1.8.1
 	github.com/vmware-tanzu/velero v1.7.0 // TODO: Update this to a pinned version
 	k8s.io/api v0.22.2
