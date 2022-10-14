@@ -12,6 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
+        include:
         - base: master
           head: master
         - base: oadp-1.1
