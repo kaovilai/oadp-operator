@@ -3,7 +3,6 @@ package credentials
 import (
 	"errors"
 	"os"
-	"strings"
 
 	oadpv1alpha1 "github.com/openshift/oadp-operator/api/v1alpha1"
 	"github.com/openshift/oadp-operator/pkg/common"
@@ -66,24 +65,6 @@ var (
 		},
 	}
 )
-
-// Get secretName and secretKey from "secretName/secretKey"
-func GetSecretNameKeyFromCredentialsFileConfigString(credentialsFile string) (string, string, error) {
-	credentialsFile = strings.TrimSpace(credentialsFile)
-	if credentialsFile == "" {
-		return "", "", nil
-	}
-	nameKeyArray := strings.Split(credentialsFile, "/")
-	if len(nameKeyArray) != 2 {
-		return "", "", errors.New("credentials file is not supported")
-	}
-	return nameKeyArray[0], nameKeyArray[1], nil
-}
-
-func GetSecretNameFromCredentialsFileConfigString(credentialsFile string) (string, error) {
-	name, _, err := GetSecretNameKeyFromCredentialsFileConfigString(credentialsFile)
-	return name, err
-}
 
 func getAWSPluginImage(dpa *oadpv1alpha1.DataProtectionApplication) string {
 	if dpa.Spec.UnsupportedOverrides[oadpv1alpha1.AWSPluginImageKey] != "" {
@@ -230,23 +211,6 @@ func AppendCloudProviderVolumes(dpa *oadpv1alpha1.DataProtectionApplication, ds 
 				)
 			}
 
-		}
-	}
-	for _, bslSpec := range dpa.Spec.BackupLocations {
-		if _, ok := bslSpec.Velero.Config["credentialsFile"]; ok {
-			if secretName, err := GetSecretNameFromCredentialsFileConfigString(bslSpec.Velero.Config["credentialsFile"]); err == nil {
-				ds.Spec.Template.Spec.Volumes = append(
-					ds.Spec.Template.Spec.Volumes,
-					corev1.Volume{
-						Name: secretName,
-						VolumeSource: corev1.VolumeSource{
-							Secret: &corev1.SecretVolumeSource{
-								SecretName: secretName,
-							},
-						},
-					},
-				)
-			}
 		}
 	}
 	return nil
