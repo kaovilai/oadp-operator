@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       branch:
-        default: master
+        default: oadp-1.1
         description: The branch to build catalog for
         type: string
         required: true
@@ -58,14 +58,14 @@ jobs:
       with:
         ref: ${{ github.event.inputs.branch }}
       if: ${{ github.event_name != 'push' && github.event_name != 'schedule'}}
-    - name: Get upstream/master
+    - name: Get upstream/oadp-1.1
       run: |
         git remote -vv
         git remote add upstream https://github.com/openshift/oadp-operator.git
         git fetch upstream
-    - name: Reset to upstream/master
+    - name: Reset to upstream/oadp-1.1
       run: |
-        git reset upstream/master
+        git reset upstream/oadp-1.1
         git add appendMakefile # preserve appendMakefile
         git restore . # discard old changes
         # appendMakefile
