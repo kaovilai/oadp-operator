@@ -70,7 +70,7 @@ jobs:
         git restore . # discard old changes
         # appendMakefile
         cat appendMakefile >> Makefile
-        echo "upstream/master" > /tmp/rev-parse-head
+        echo "upstream/oadp-1.1" > /tmp/rev-parse-head
         echo "${{ github.ref_name }}" > /tmp/tag
       if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
     - name: appendMakefile to target branch and appendMakefile
@@ -304,4 +304,4 @@ jobs:
     - name: git status
       run: git status
     - name: git diff
-      run: git diff upstream/master
+      run: git diff upstream/oadp-1.1
