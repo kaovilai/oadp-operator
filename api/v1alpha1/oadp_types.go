@@ -177,10 +177,12 @@ type DataMover struct {
 	Timeout string `json:"timeout,omitempty"`
 	// the number of batched volumeSnapshotBackups that can be inProgress at once, default value is 10
 	// +kubebuilder:default=10
+	// +kubebuilder:validation:Minimum=1
 	// +optional
 	MaxConcurrentBackupVolumes *int64 `json:"maxConcurrentBackupVolumes,omitempty"`
 	// the number of batched volumeSnapshotRestores that can be inProgress at once, default value is 10
 	// +kubebuilder:default=10
+	// +kubebuilder:validation:Minimum=1
 	// +optional
 	MaxConcurrentRestoreVolumes *int64 `json:"maxConcurrentRestoreVolumes,omitempty"`
 }
