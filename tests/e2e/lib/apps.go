@@ -404,7 +404,7 @@ func RunMustGather(oc_cli string, artifact_dir string) error {
 	return err
 }
 
-func makeRequest(request string, api string, todo string) {
+func makeRequest(request string, api string, todo string) error {
 	params := url.Values{}
 	params.Add("description", todo)
 	body := strings.NewReader(params.Encode())
@@ -415,9 +415,15 @@ func makeRequest(request string, api string, todo string) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Printf("Response of todo POST REQUEST  %s", resp.Status)
+		log.Printf("Error making post request to todo app before Prebackup  %s", err)
+		if resp != nil {
+			log.Printf("Response of todo POST REQUEST  %s", resp.Status)
+		} else {
+			log.Printf("Response of todo POST REQUEST is nil")
+		}
 	}
 	defer resp.Body.Close()
+	return err
 }
 
 // VerifyBackupRestoreData verifies if app ready before backup and after restore to compare data.
