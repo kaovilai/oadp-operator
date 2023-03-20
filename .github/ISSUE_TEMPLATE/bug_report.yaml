@@ -1,7 +1,7 @@
 name: Bug Report [moved]
 description: Click for details
 title: "Bug: "
-labels: ["kind/bug"]
+labels: ["redirected-to-jira"]
 body:
 - type: markdown
   attributes:
