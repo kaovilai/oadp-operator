@@ -3,3 +3,6 @@ description: Do not file bug here
 title: "Bug: "
 labels: ["kind/bug"]
 body:
+- type: markdown
+  attributes:
+    value: "## Welcome!"
