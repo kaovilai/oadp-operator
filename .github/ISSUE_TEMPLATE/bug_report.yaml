@@ -7,7 +7,7 @@ body:
   attributes:
     value: |
       ## Bug tracking has moved to [Jira](http://issues.redhat.com/browse/OADP)
-      ## [Open a new support case](https://access.redhat.com/support/cases/#/case/new)for assistance
+      ## [Open a new support case](https://access.redhat.com/support/cases/#/case/new) for assistance
 - type: dropdown
   id: bughasmoved
   attributes:
