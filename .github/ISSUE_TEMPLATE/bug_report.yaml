@@ -1,8 +1,11 @@
-name: Bug Report
-description: Do not file bug here
+name: Bug Report [moved]
+description: Click for details
 title: "Bug: "
 labels: ["kind/bug"]
 body:
 - type: markdown
   attributes:
-    value: "## Welcome!"
+    value: |
+      Bug tracking has moved to [Jira](http://issues.redhat.com/browse/OADP)
+      [Open a new support case](https://access.redhat.com/support/cases/#/case/new)for assistance
+
