@@ -87,7 +87,7 @@ func (r *DPAReconciler) ValidateDataProtectionCR(log logr.Logger) (bool, error) 
 		return false, err
 	}
 
-	if _, err := r.getResticResourceReqs(&dpa); err != nil {
+	if _, err := getResticResourceReqs(&dpa); err != nil {
 		return false, err
 	}
 
