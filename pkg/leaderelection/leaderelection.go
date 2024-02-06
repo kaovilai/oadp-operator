@@ -2,12 +2,13 @@ package leaderelection
 
 import (
 	"context"
+	"time"
+
 	configv1 "github.com/openshift/api/config/v1"
 	"github.com/openshift/library-go/pkg/config/clusterstatus"
 	"github.com/openshift/library-go/pkg/config/leaderelection"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog"
-	"time"
 )
 
 // GetLeaderElectionConfig returns leader election config defaults based on the cluster topology
@@ -32,7 +33,7 @@ func GetLeaderElectionConfig(restConfig *rest.Config, enabled bool) configv1.Lea
 				return leaderelection.LeaderElectionSNOConfig(defaultLeaderElection)
 			}
 		} else {
-			klog.Warning("unable to get cluster infrastructure status, using HA cluster values for leader election: %v", err)
+			klog.Warningf("unable to get cluster infrastructure status, using HA cluster values for leader election: %v", err)
 		}
 	}
 	return defaultLeaderElection
