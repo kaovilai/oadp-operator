@@ -291,12 +291,12 @@ rm -rf $$TMP_DIR ;\
 }
 endef
 
-YQ = $(shell pwd)/bin/yq
+YQ = $(GOBIN)/yq
 yq: ## Download yq locally if necessary.
 	# 4.28.1 is latest with go 1.17 go.mod
 	git clone https://github.com/kaovilai/yq-k8s --branch=master --single-branch bin/yq-k8s
 	cd bin/yq-k8s && \
-	GOBIN=$(readlink -f ../) go install . ; \
+	go install . ; \
 	rm -rf ../yq-k8s
 
 OPERATOR_SDK = $(shell pwd)/bin/operator-sdk
