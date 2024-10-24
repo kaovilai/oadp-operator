@@ -5,6 +5,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// CloudStorage types are APIs for automatic bucket creation at cloud providers if defined name do not exists.
+
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status
 
@@ -19,9 +21,9 @@ type CloudStorage struct {
 type CloudStorageProvider string
 
 const (
-	AWSBucketProvider   CloudStorageProvider = "aws"
-	AzureBucketProvider CloudStorageProvider = "azure"
-	GCPBucketProvider   CloudStorageProvider = "gcp"
+	AWSBucketProvider   CloudStorageProvider = CloudStorageProvider(DefaultPluginAWS)
+	AzureBucketProvider CloudStorageProvider = CloudStorageProvider(DefaultPluginMicrosoftAzure)
+	GCPBucketProvider   CloudStorageProvider = CloudStorageProvider(DefaultPluginGCP)
 )
 
 type CloudStorageSpec struct {
@@ -36,8 +38,8 @@ type CloudStorageSpec struct {
 	Tags map[string]string `json:"tags,omitempty"`
 	// region for the bucket to be in, will be us-east-1 if not set.
 	Region string `json:"region,omitempty"`
-	// +kubebuilder:validation:Enum=aws
 	// provider is the provider of the cloud storage
+	// +kubebuilder:validation:Enum=aws
 	Provider CloudStorageProvider `json:"provider"`
 
 	// https://pkg.go.dev/github.com/Azure/azure-sdk-for-go/sdk/storage/azblob@v0.2.0#section-readme

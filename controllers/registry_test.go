@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
-	oadpv1alpha1 "github.com/openshift/oadp-operator/api/v1alpha1"
 	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -14,6 +13,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
+
+	oadpv1alpha1 "github.com/openshift/oadp-operator/api/v1alpha1"
 )
 
 func getSchemeForFakeClientForRegistry() (*runtime.Scheme, error) {
@@ -150,7 +151,7 @@ var testAWSEnvVar = cloudProviderEnvVarMap["aws"]
 var testAzureEnvVar = cloudProviderEnvVarMap["azure"]
 var testGCPEnvVar = cloudProviderEnvVarMap["gcp"]
 
-func TestDPAReconciler_getSecretNameAndKeyforBackupLocation(t *testing.T) {
+func TestDPAReconciler_getSecretNameAndKey(t *testing.T) {
 	tests := []struct {
 		name           string
 		bsl            *oadpv1alpha1.BackupLocation
@@ -209,6 +210,51 @@ func TestDPAReconciler_getSecretNameAndKeyforBackupLocation(t *testing.T) {
 
 			wantProfile: "aws-provider-no-cred",
 		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fakeClient, err := getFakeClientFromObjects(tt.secret)
+			if err != nil {
+				t.Errorf("error in creating fake client, likely programmer error")
+			}
+			r := &DPAReconciler{
+				Client:        fakeClient,
+				Scheme:        fakeClient.Scheme(),
+				Log:           logr.Discard(),
+				Context:       newContextForTest(tt.name),
+				EventRecorder: record.NewFakeRecorder(10),
+			}
+
+			if tt.wantProfile == "aws-provider" {
+				tt.wantSecretKey = "cloud"
+				tt.wantSecretName = "cloud-credentials-aws"
+			}
+			if tt.wantProfile == "aws-provider-no-cred" {
+				tt.wantSecretKey = "cloud"
+				tt.wantSecretName = "cloud-credentials"
+			}
+
+			gotName, gotKey, _ := r.getSecretNameAndKey(tt.bsl.Velero.Config, tt.bsl.Velero.Credential, oadpv1alpha1.DefaultPlugin(tt.bsl.Velero.Provider))
+
+			if !reflect.DeepEqual(tt.wantSecretName, gotName) {
+				t.Errorf("expected secret name to be %#v, got %#v", tt.wantSecretName, gotName)
+			}
+			if !reflect.DeepEqual(tt.wantSecretKey, gotKey) {
+				t.Errorf("expected secret key to be %#v, got %#v", tt.wantSecretKey, gotKey)
+			}
+		})
+	}
+}
+
+func TestDPAReconciler_getSecretNameAndKeyFromCloudStorage(t *testing.T) {
+	tests := []struct {
+		name           string
+		bsl            *oadpv1alpha1.BackupLocation
+		secret         *corev1.Secret
+		wantProfile    string
+		wantSecretName string
+		wantSecretKey  string
+	}{
 		{
 			name: "given cloud storage secret, appropriate secret name and key are returned",
 			bsl: &oadpv1alpha1.BackupLocation{
@@ -268,14 +314,6 @@ func TestDPAReconciler_getSecretNameAndKeyforBackupLocation(t *testing.T) {
 				EventRecorder: record.NewFakeRecorder(10),
 			}
 
-			if tt.wantProfile == "aws-provider" {
-				tt.wantSecretKey = "cloud"
-				tt.wantSecretName = "cloud-credentials-aws"
-			}
-			if tt.wantProfile == "aws-provider-no-cred" {
-				tt.wantSecretKey = "cloud"
-				tt.wantSecretName = "cloud-credentials"
-			}
 			if tt.wantProfile == "aws-cloud-cred" {
 				tt.wantSecretKey = "cloud"
 				tt.wantSecretName = "cloud-credentials-aws"
@@ -285,12 +323,13 @@ func TestDPAReconciler_getSecretNameAndKeyforBackupLocation(t *testing.T) {
 				tt.wantSecretName = ""
 			}
 
-			gotName, gotKey := r.getSecretNameAndKeyforBackupLocation(*tt.bsl)
+			gotName, gotKey, _ := r.getSecretNameAndKeyFromCloudStorage(tt.bsl.CloudStorage)
+
 			if !reflect.DeepEqual(tt.wantSecretName, gotName) {
-				t.Errorf("expected registry container env var to be %#v, got %#v", tt.wantSecretName, gotName)
+				t.Errorf("expected secret name to be %#v, got %#v", tt.wantSecretName, gotName)
 			}
 			if !reflect.DeepEqual(tt.wantSecretKey, gotKey) {
-				t.Errorf("expected registry container env var to be %#v, got %#v", tt.wantSecretKey, gotKey)
+				t.Errorf("expected secret key to be %#v, got %#v", tt.wantSecretKey, gotKey)
 			}
 		})
 	}
@@ -383,7 +422,7 @@ func TestDPAReconciler_populateAWSRegistrySecret(t *testing.T) {
 				t.Errorf("populateAWSRegistrySecret() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if !reflect.DeepEqual(tt.registrySecret.Data, wantRegistrySecret.Data) {
-				t.Errorf("expected bsl labels to be %#v, got %#v", tt.registrySecret.Data, wantRegistrySecret.Data)
+				t.Errorf("expected aws registry secret to be %#v, got %#v", tt.registrySecret.Data, wantRegistrySecret.Data)
 			}
 		})
 	}
@@ -470,10 +509,10 @@ func TestDPAReconciler_populateAzureRegistrySecret(t *testing.T) {
 				Data: azureRegistrySecretData,
 			}
 			if err := r.populateAzureRegistrySecret(tt.bsl, tt.registrySecret); (err != nil) != tt.wantErr {
-				t.Errorf("populateAWSRegistrySecret() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("populateAzureRegistrySecret() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if !reflect.DeepEqual(tt.registrySecret.Data, wantRegistrySecret.Data) {
-				t.Errorf("expected bsl labels to be %#v, got %#v", tt.registrySecret, wantRegistrySecret.Data)
+				t.Errorf("expected azure registry secret to be %#v, got %#v", tt.registrySecret, wantRegistrySecret.Data)
 			}
 		})
 	}

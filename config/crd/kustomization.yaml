@@ -7,6 +7,8 @@ resources:
 - bases/velero.io_backuprepositories.yaml
 - bases/velero.io_backups.yaml
 - bases/velero.io_backupstoragelocations.yaml
+- bases/velero.io_datadownloads.yaml
+- bases/velero.io_datauploads.yaml
 - bases/velero.io_deletebackuprequests.yaml
 - bases/velero.io_downloadrequests.yaml
 - bases/velero.io_podvolumebackups.yaml
@@ -15,8 +17,7 @@ resources:
 - bases/velero.io_schedules.yaml
 - bases/velero.io_serverstatusrequests.yaml
 - bases/velero.io_volumesnapshotlocations.yaml
-- bases/datamover.oadp.openshift.io_volumesnapshotbackups.yaml
-- bases/datamover.oadp.openshift.io_volumesnapshotrestores.yaml
+- bases/nac.oadp.openshift.io_nonadminbackups.yaml
 #+kubebuilder:scaffold:crdkustomizeresource
 
 patchesStrategicMerge:

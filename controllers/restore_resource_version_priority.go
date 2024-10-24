@@ -3,26 +3,22 @@ package controllers
 import (
 	"fmt"
 
-	oadpv1alpha1 "github.com/openshift/oadp-operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 const (
-	enableApiGroupVersionsFeatureFlag      = "EnableAPIGroupVersions"
 	enableApiGroupVersionsConfigMapName    = "enableapigroupversions"
 	restoreResourcesVersionPriorityDataKey = "restoreResourcesVersionPriority"
 )
 
 // If RestoreResourcesVersionPriority is defined, configmap is created or updated and feature flag for EnableAPIGroupVersions is added to velero
-func (r *DPAReconciler) ReconcileRestoreResourcesVersionPriority(dpa *oadpv1alpha1.DataProtectionApplication) (bool, error) {
+func (r *DPAReconciler) ReconcileRestoreResourcesVersionPriority() (bool, error) {
+	dpa := r.dpa
 	if len(dpa.Spec.Configuration.Velero.RestoreResourcesVersionPriority) == 0 {
 		return true, nil
 	}
-	// if the RestoreResourcesVersionPriority is specified then ensure feature flag is enabled for enableApiGroupVersions
-	// duplicate feature flag checks are done in ReconcileVeleroDeployment
-	dpa.Spec.Configuration.Velero.FeatureFlags = append(dpa.Spec.Configuration.Velero.FeatureFlags, enableApiGroupVersionsFeatureFlag)
 	configMap := corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      enableApiGroupVersionsConfigMapName,

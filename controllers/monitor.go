@@ -4,112 +4,13 @@ import (
 	"fmt"
 
 	"github.com/go-logr/logr"
-	oadpv1alpha1 "github.com/openshift/oadp-operator/api/v1alpha1"
-	monitor "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
-func (r *DPAReconciler) ReconcileVeleroServiceMonitor(log logr.Logger) (bool, error) {
-
-	dpa := oadpv1alpha1.DataProtectionApplication{}
-	if err := r.Get(r.Context, r.NamespacedName, &dpa); err != nil {
-		return false, err
-	}
-
-	serviceMonitor := &monitor.ServiceMonitor{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "openshift-adp-velero-metrics-sm",
-			Namespace: r.NamespacedName.Namespace,
-		},
-	}
-
-	op, err := controllerutil.CreateOrPatch(r.Context, r.Client, serviceMonitor, func() error {
-
-		if serviceMonitor.ObjectMeta.CreationTimestamp.IsZero() {
-			serviceMonitor.Spec.Selector = metav1.LabelSelector{
-				MatchLabels: r.getDpaAppLabels(&dpa),
-			}
-		}
-
-		// update service monitor
-		return r.buildVeleroServiceMonitor(serviceMonitor, &dpa)
-	})
-
-	if err != nil {
-		return false, err
-	}
-
-	//TODO: Review service monitor status and report errors and conditions
-
-	if op == controllerutil.OperationResultCreated || op == controllerutil.OperationResultUpdated {
-		// Trigger event to indicate service monitor was created or updated
-		r.EventRecorder.Event(serviceMonitor,
-			corev1.EventTypeNormal,
-			"VeleroServiceMonitorReconciled",
-			fmt.Sprintf("performed %s on dpa service monitor %s/%s", op, serviceMonitor.Namespace, serviceMonitor.Name),
-		)
-	}
-	return true, nil
-}
-
-func (r *DPAReconciler) buildVeleroServiceMonitor(serviceMonitor *monitor.ServiceMonitor, dpa *oadpv1alpha1.DataProtectionApplication) error {
-
-	if dpa == nil {
-		return fmt.Errorf("dpa CR cannot be nil")
-	}
-
-	if serviceMonitor == nil {
-		return fmt.Errorf("service monitor cannot be nil")
-	}
-
-	// Setting controller owner reference on the service monitor
-	err := controllerutil.SetControllerReference(dpa, serviceMonitor, r.Scheme)
-	if err != nil {
-		return err
-	}
-
-	serviceMonitor.Spec.Selector = metav1.LabelSelector{
-		MatchLabels: r.getDpaAppLabels(dpa),
-	}
-
-	serviceMonitor.Labels = r.getDpaAppLabels(dpa)
-
-	serviceMonitor.Spec.Endpoints = []monitor.Endpoint{
-		{
-			Interval: "30s",
-			Port:     "monitoring",
-			MetricRelabelConfigs: []*monitor.RelabelConfig{
-				{
-					Action: "keep",
-					Regex:  ("velero_backup_total|velero_restore_total"),
-					SourceLabels: []string{
-						"__name__",
-					},
-				},
-			},
-		},
-	}
-
-	//serviceMonitor.Spec.JobLabel = "app"
-
-	serviceMonitor.Spec.NamespaceSelector = monitor.NamespaceSelector{
-		MatchNames: []string{
-			dpa.Namespace,
-		},
-	}
-
-	return nil
-}
-
 func (r *DPAReconciler) ReconcileVeleroMetricsSVC(log logr.Logger) (bool, error) {
-	dpa := oadpv1alpha1.DataProtectionApplication{}
-	if err := r.Get(r.Context, r.NamespacedName, &dpa); err != nil {
-		return false, err
-	}
-
 	svc := corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "openshift-adp-velero-metrics-svc",
@@ -120,7 +21,7 @@ func (r *DPAReconciler) ReconcileVeleroMetricsSVC(log logr.Logger) (bool, error)
 	// Create SVC
 	op, err := controllerutil.CreateOrPatch(r.Context, r.Client, &svc, func() error {
 		// TODO: check for svc status condition errors and respond here
-		err := r.updateVeleroMetricsSVC(&svc, &dpa)
+		err := r.updateVeleroMetricsSVC(&svc)
 		return err
 	})
 	if err != nil {
@@ -138,16 +39,16 @@ func (r *DPAReconciler) ReconcileVeleroMetricsSVC(log logr.Logger) (bool, error)
 	return true, nil
 }
 
-func (r *DPAReconciler) updateVeleroMetricsSVC(svc *corev1.Service, dpa *oadpv1alpha1.DataProtectionApplication) error {
+func (r *DPAReconciler) updateVeleroMetricsSVC(svc *corev1.Service) error {
 	// Setting controller owner reference on the metrics svc
-	err := controllerutil.SetControllerReference(dpa, svc, r.Scheme)
+	err := controllerutil.SetControllerReference(r.dpa, svc, r.Scheme)
 	if err != nil {
 		return err
 	}
 
 	// when updating the spec fields we update each field individually
 	// to get around the immutable fields
-	svc.Spec.Selector = r.getDpaAppLabels(dpa)
+	svc.Spec.Selector = getDpaAppLabels(r.dpa)
 
 	svc.Spec.Type = corev1.ServiceTypeClusterIP
 	svc.Spec.Ports = []corev1.ServicePort{
@@ -161,6 +62,6 @@ func (r *DPAReconciler) updateVeleroMetricsSVC(svc *corev1.Service, dpa *oadpv1a
 		},
 	}
 
-	svc.Labels = r.getDpaAppLabels(dpa)
+	svc.Labels = getDpaAppLabels(r.dpa)
 	return nil
 }

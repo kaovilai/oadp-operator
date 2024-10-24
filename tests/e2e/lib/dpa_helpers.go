@@ -7,131 +7,127 @@ import (
 	"fmt"
 	"log"
 	"reflect"
-	"strings"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	. "github.com/onsi/ginkgo/v2"
-	buildv1 "github.com/openshift/api/build/v1"
-	"github.com/openshift/oadp-operator/pkg/common"
-
-	volumesnapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
-	appsv1 "github.com/openshift/api/apps/v1"
-	security "github.com/openshift/api/security/v1"
-	templatev1 "github.com/openshift/api/template/v1"
-	oadpv1alpha1 "github.com/openshift/oadp-operator/api/v1alpha1"
-	utils "github.com/openshift/oadp-operator/tests/e2e/utils"
-	operators "github.com/operator-framework/api/pkg/operators/v1alpha1"
 	velero "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/config"
+
+	oadpv1alpha1 "github.com/openshift/oadp-operator/api/v1alpha1"
 )
 
 type BackupRestoreType string
 
 const (
-	CSI    BackupRestoreType = "csi"
-	RESTIC BackupRestoreType = "restic"
+	CSI             BackupRestoreType = "csi"
+	CSIDataMover    BackupRestoreType = "csi-datamover"
+	RESTIC          BackupRestoreType = "restic"
+	KOPIA           BackupRestoreType = "kopia"
+	NativeSnapshots BackupRestoreType = "native-snapshots"
 )
 
 type DpaCustomResource struct {
-	Name              string
-	Namespace         string
-	backupRestoreType BackupRestoreType
-	CustomResource    *oadpv1alpha1.DataProtectionApplication
-	Client            client.Client
-	Provider          string
+	Name                 string
+	Namespace            string
+	Client               client.Client
+	VSLSecretName        string
+	BSLSecretName        string
+	BSLConfig            map[string]string
+	BSLProvider          string
+	BSLBucket            string
+	BSLBucketPrefix      string
+	VeleroDefaultPlugins []oadpv1alpha1.DefaultPlugin
+	SnapshotLocations    []oadpv1alpha1.SnapshotLocation
+	UnsupportedOverrides map[oadpv1alpha1.UnsupportedImageKey]string
 }
 
-var VeleroPrefix = "velero-e2e-" + string(uuid.NewUUID())
-var Dpa *oadpv1alpha1.DataProtectionApplication
+func LoadDpaSettingsFromJson(settings string) (*oadpv1alpha1.DataProtectionApplication, error) {
+	file, err := ReadFile(settings)
+	if err != nil {
+		return nil, fmt.Errorf("Error getting settings json file: %v", err)
+	}
+	dpa := &oadpv1alpha1.DataProtectionApplication{}
+	err = json.Unmarshal(file, &dpa)
+	if err != nil {
+		return nil, fmt.Errorf("Error decoding json file: %v", err)
+	}
+	return dpa, nil
+}
 
-func (v *DpaCustomResource) Build(backupRestoreType BackupRestoreType) error {
-	// Velero Instance creation spec with backupstorage location default to AWS. Would need to parameterize this later on to support multiple plugins.
-	dpaInstance := oadpv1alpha1.DataProtectionApplication{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      v.Name,
-			Namespace: v.Namespace,
-		},
-		Spec: oadpv1alpha1.DataProtectionApplicationSpec{
-			Configuration: &oadpv1alpha1.ApplicationConfig{
-				Velero: &oadpv1alpha1.VeleroConfig{
-					LogLevel:       "debug",
-					DefaultPlugins: v.CustomResource.Spec.Configuration.Velero.DefaultPlugins,
-				},
-				Restic: &oadpv1alpha1.ResticConfig{
+func (v *DpaCustomResource) Build(backupRestoreType BackupRestoreType) *oadpv1alpha1.DataProtectionApplicationSpec {
+	dpaSpec := oadpv1alpha1.DataProtectionApplicationSpec{
+		Configuration: &oadpv1alpha1.ApplicationConfig{
+			Velero: &oadpv1alpha1.VeleroConfig{
+				LogLevel:       "debug",
+				DefaultPlugins: v.VeleroDefaultPlugins,
+			},
+			NodeAgent: &oadpv1alpha1.NodeAgentConfig{
+				UploaderType: "kopia",
+				NodeAgentCommonFields: oadpv1alpha1.NodeAgentCommonFields{
 					PodConfig: &oadpv1alpha1.PodConfig{},
 				},
 			},
-			SnapshotLocations: v.CustomResource.Spec.SnapshotLocations,
-			BackupLocations: []oadpv1alpha1.BackupLocation{
-				{
-					Velero: &velero.BackupStorageLocationSpec{
-						Provider: v.CustomResource.Spec.BackupLocations[0].Velero.Provider,
-						Default:  true,
-						Config:   v.CustomResource.Spec.BackupLocations[0].Velero.Config,
-						Credential: &corev1.SecretKeySelector{
-							LocalObjectReference: corev1.LocalObjectReference{
-								Name: "bsl-cloud-credentials-" + v.Provider,
-							},
-							Key: "cloud",
+		},
+		SnapshotLocations: v.SnapshotLocations,
+		BackupLocations: []oadpv1alpha1.BackupLocation{
+			{
+				Velero: &velero.BackupStorageLocationSpec{
+					Provider: v.BSLProvider,
+					Default:  true,
+					Config:   v.BSLConfig,
+					Credential: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: v.BSLSecretName,
 						},
-						StorageType: velero.StorageType{
-							ObjectStorage: &velero.ObjectStorageLocation{
-								Bucket: v.CustomResource.Spec.BackupLocations[0].Velero.ObjectStorage.Bucket,
-								Prefix: VeleroPrefix,
-							},
+						Key: "cloud",
+					},
+					StorageType: velero.StorageType{
+						ObjectStorage: &velero.ObjectStorageLocation{
+							Bucket: v.BSLBucket,
+							Prefix: v.BSLBucketPrefix,
 						},
 					},
 				},
 			},
 		},
-	}
-	v.backupRestoreType = backupRestoreType
-	type emptyStruct struct{}
-	// default plugins map
-	defaultPlugins := make(map[oadpv1alpha1.DefaultPlugin]emptyStruct)
-	for _, plugin := range dpaInstance.Spec.Configuration.Velero.DefaultPlugins {
-		defaultPlugins[plugin] = emptyStruct{}
-	}
-	featureFlags := make(map[string]emptyStruct)
-	for _, flag := range dpaInstance.Spec.Configuration.Velero.FeatureFlags {
-		featureFlags[flag] = emptyStruct{}
+		UnsupportedOverrides: v.UnsupportedOverrides,
 	}
 	switch backupRestoreType {
-	case RESTIC:
-		dpaInstance.Spec.Configuration.Restic.Enable = pointer.Bool(true)
-		delete(defaultPlugins, oadpv1alpha1.DefaultPluginCSI)
-		delete(featureFlags, "EnableCSI")
+	case RESTIC, KOPIA:
+		dpaSpec.Configuration.NodeAgent.Enable = ptr.To(true)
+		dpaSpec.Configuration.NodeAgent.UploaderType = string(backupRestoreType)
+		dpaSpec.SnapshotLocations = nil
 	case CSI:
-		dpaInstance.Spec.Configuration.Restic.Enable = pointer.Bool(false)
-		defaultPlugins[oadpv1alpha1.DefaultPluginCSI] = emptyStruct{}
-		featureFlags["EnableCSI"] = emptyStruct{}
+		dpaSpec.Configuration.NodeAgent.Enable = ptr.To(false)
+		dpaSpec.Configuration.Velero.DefaultPlugins = append(dpaSpec.Configuration.Velero.DefaultPlugins, oadpv1alpha1.DefaultPluginCSI)
+		dpaSpec.Configuration.Velero.FeatureFlags = append(dpaSpec.Configuration.Velero.FeatureFlags, velero.CSIFeatureFlag)
+		dpaSpec.SnapshotLocations = nil
+	case CSIDataMover:
+		// We don't need to have restic use case, kopia is enough
+		dpaSpec.Configuration.NodeAgent.Enable = ptr.To(true)
+		dpaSpec.Configuration.NodeAgent.UploaderType = "kopia"
+		dpaSpec.Configuration.Velero.DefaultPlugins = append(dpaSpec.Configuration.Velero.DefaultPlugins, oadpv1alpha1.DefaultPluginCSI)
+		dpaSpec.Configuration.Velero.FeatureFlags = append(dpaSpec.Configuration.Velero.FeatureFlags, velero.CSIFeatureFlag)
+		dpaSpec.SnapshotLocations = nil
+	case NativeSnapshots:
+		dpaSpec.SnapshotLocations[0].Velero.Credential = &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{
+				Name: v.VSLSecretName,
+			},
+			Key: "cloud",
+		}
 	}
-	dpaInstance.Spec.Configuration.Velero.DefaultPlugins = make([]oadpv1alpha1.DefaultPlugin, 0)
-	for k := range defaultPlugins {
-		dpaInstance.Spec.Configuration.Velero.DefaultPlugins = append(dpaInstance.Spec.Configuration.Velero.DefaultPlugins, k)
-	}
-	dpaInstance.Spec.Configuration.Velero.FeatureFlags = make([]string, 0)
-	for k := range featureFlags {
-		dpaInstance.Spec.Configuration.Velero.FeatureFlags = append(dpaInstance.Spec.Configuration.Velero.FeatureFlags, k)
-	}
-	v.CustomResource = &dpaInstance
-	return nil
+
+	return &dpaSpec
 }
 
-func (v *DpaCustomResource) Create() error {
-	err := v.SetClient()
-	if err != nil {
-		return err
-	}
-	err = v.Client.Create(context.Background(), v.CustomResource)
+func (v *DpaCustomResource) Create(dpa *oadpv1alpha1.DataProtectionApplication) error {
+	err := v.Client.Create(context.Background(), dpa)
 	if apierrors.IsAlreadyExists(err) {
 		return errors.New("found unexpected existing Velero CR")
 	} else if err != nil {
@@ -141,167 +137,72 @@ func (v *DpaCustomResource) Create() error {
 }
 
 func (v *DpaCustomResource) Get() (*oadpv1alpha1.DataProtectionApplication, error) {
-	err := v.SetClient()
-	if err != nil {
-		return nil, err
-	}
-	vel := oadpv1alpha1.DataProtectionApplication{}
-	err = v.Client.Get(context.Background(), client.ObjectKey{
+	dpa := oadpv1alpha1.DataProtectionApplication{}
+	err := v.Client.Get(context.Background(), client.ObjectKey{
 		Namespace: v.Namespace,
 		Name:      v.Name,
-	}, &vel)
+	}, &dpa)
 	if err != nil {
 		return nil, err
 	}
-	return &vel, nil
+	return &dpa, nil
 }
 
-func (v *DpaCustomResource) GetNoErr() *oadpv1alpha1.DataProtectionApplication {
-	Dpa, _ := v.Get()
-	return Dpa
-}
-
-func (v *DpaCustomResource) CreateOrUpdate(spec *oadpv1alpha1.DataProtectionApplicationSpec) error {
-	return v.CreateOrUpdateWithRetries(spec, 3)
-}
-func (v *DpaCustomResource) CreateOrUpdateWithRetries(spec *oadpv1alpha1.DataProtectionApplicationSpec, retries int) error {
-	var (
-		err error
-		cr  *oadpv1alpha1.DataProtectionApplication
-	)
-	for i := 0; i < retries; i++ {
-		if cr, err = v.Get(); apierrors.IsNotFound(err) {
-			v.Build(v.backupRestoreType)
-			v.CustomResource.Spec = *spec
-			return v.Create()
-		} else if err != nil {
-			return err
-		}
-		cr.Spec = *spec
-		if err = v.Client.Update(context.Background(), cr); err != nil {
-			if apierrors.IsConflict(err) && i < retries-1 {
-				log.Println("conflict detected during DPA CreateOrUpdate, retrying for ", retries-i-1, " more times")
-				time.Sleep(time.Second * 2)
-				continue
+func (v *DpaCustomResource) CreateOrUpdate(c client.Client, spec *oadpv1alpha1.DataProtectionApplicationSpec) error {
+	// for debugging
+	// prettyPrint, _ := json.MarshalIndent(spec, "", "  ")
+	// log.Printf("DPA with spec\n%s\n", prettyPrint)
+	dpa, err := v.Get()
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			dpa = &oadpv1alpha1.DataProtectionApplication{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      v.Name,
+					Namespace: v.Namespace,
+				},
+				Spec: *spec.DeepCopy(),
 			}
-			return err
+			dpa.Spec.UnsupportedOverrides = v.UnsupportedOverrides
+			return v.Create(dpa)
 		}
-		return nil
-	}
-	return err
-}
-
-func (v *DpaCustomResource) Delete() error {
-	err := v.SetClient()
-	if err != nil {
 		return err
 	}
-	err = v.Client.Delete(context.Background(), v.CustomResource)
-	if apierrors.IsNotFound(err) {
-		return nil
-	}
-	return err
-}
-
-func (v *DpaCustomResource) SetClient() error {
-	client, err := client.New(config.GetConfigOrDie(), client.Options{})
+	dpaPatch := dpa.DeepCopy()
+	spec.DeepCopyInto(&dpaPatch.Spec)
+	dpaPatch.ObjectMeta.ManagedFields = nil
+	dpaPatch.Spec.UnsupportedOverrides = v.UnsupportedOverrides
+	err = v.Client.Patch(context.Background(), dpaPatch, client.MergeFrom(dpa), &client.PatchOptions{})
 	if err != nil {
+		log.Printf("error patching DPA: %s", err)
+		if apierrors.IsConflict(err) {
+			log.Println("conflict detected during DPA CreateOrUpdate")
+		}
 		return err
 	}
-	oadpv1alpha1.AddToScheme(client.Scheme())
-	velero.AddToScheme(client.Scheme())
-	appsv1.AddToScheme(client.Scheme())
-	corev1.AddToScheme(client.Scheme())
-	templatev1.AddToScheme(client.Scheme())
-	security.AddToScheme(client.Scheme())
-	operators.AddToScheme(client.Scheme())
-	volumesnapshotv1.AddToScheme(client.Scheme())
-	buildv1.AddToScheme(client.Scheme())
 
-	v.Client = client
 	return nil
 }
 
-func GetVeleroPods(namespace string) (*corev1.PodList, error) {
-	clientset, err := setUpClient()
+func (v *DpaCustomResource) Delete() error {
+	dpa, err := v.Get()
 	if err != nil {
-		return nil, err
-	}
-	// select Velero pod with this label
-	veleroOptions := metav1.ListOptions{
-		LabelSelector: "component=velero",
-	}
-	veleroOptionsDeploy := metav1.ListOptions{
-		LabelSelector: "deploy=velero",
-	}
-	// get pods in test namespace with labelSelector
-	var podList *corev1.PodList
-	if podList, err = clientset.CoreV1().Pods(namespace).List(context.TODO(), veleroOptions); err != nil {
-		return nil, err
-	}
-	if len(podList.Items) == 0 {
-		// handle some oadp versions where label was deploy=velero
-		if podList, err = clientset.CoreV1().Pods(namespace).List(context.TODO(), veleroOptionsDeploy); err != nil {
-			return nil, err
+		if apierrors.IsNotFound(err) {
+			return nil
 		}
+		return err
 	}
-	return podList, nil
-}
-
-func AreVeleroPodsRunning(namespace string) wait.ConditionFunc {
-	return func() (bool, error) {
-		podList, err := GetVeleroPods(namespace)
-		if err != nil {
-			return false, err
-		}
-		if podList.Items == nil || len(podList.Items) == 0 {
-			GinkgoWriter.Println("velero pods not found")
-			return false, nil
-		}
-		for _, podInfo := range (*podList).Items {
-			if podInfo.Status.Phase != corev1.PodRunning {
-				log.Printf("pod: %s is not yet running with status: %v", podInfo.Name, podInfo.Status)
-				return false, nil
-			}
-		}
-		return true, nil
-	}
-}
-
-func GetOpenShiftADPLogs(namespace string) (string, error) {
-	return GetPodWithPrefixContainerLogs(namespace, "openshift-adp-controller-manager-", "manager")
-}
-
-// Returns logs from velero container on velero pod
-func GetVeleroContainerLogs(namespace string) (string, error) {
-	return GetPodWithPrefixContainerLogs(namespace, "velero-", "velero")
-}
-
-func GetVeleroContainerFailureLogs(namespace string) []string {
-	containerLogs, err := GetVeleroContainerLogs(namespace)
-	if err != nil {
-		log.Printf("cannot get velero container logs")
+	err = v.Client.Delete(context.Background(), dpa)
+	if err != nil && apierrors.IsNotFound(err) {
 		return nil
 	}
-	containerLogsArray := strings.Split(containerLogs, "\n")
-	var failureArr = []string{}
-	for i, line := range containerLogsArray {
-		if strings.Contains(line, "level=error") {
-			failureArr = append(failureArr, fmt.Sprintf("velero container error line#%d: "+line+"\n", i))
-		}
-	}
-	return failureArr
+	return err
 }
 
 func (v *DpaCustomResource) IsDeleted() wait.ConditionFunc {
 	return func() (bool, error) {
-		err := v.SetClient()
-		if err != nil {
-			return false, err
-		}
 		// Check for velero CR in cluster
 		vel := oadpv1alpha1.DataProtectionApplication{}
-		err = v.Client.Get(context.Background(), client.ObjectKey{
+		err := v.Client.Get(context.Background(), client.ObjectKey{
 			Namespace: v.Namespace,
 			Name:      v.Name,
 		}, &vel)
@@ -312,115 +213,148 @@ func (v *DpaCustomResource) IsDeleted() wait.ConditionFunc {
 	}
 }
 
-// check if bsl matches the spec
-func DoesBSLSpecMatchesDpa(namespace string, bsl velero.BackupStorageLocationSpec, spec *oadpv1alpha1.DataProtectionApplicationSpec) (bool, error) {
-	if len(spec.BackupLocations) == 0 {
-		return false, errors.New("no backup storage location configured. Expected BSL to be configured")
+func (v *DpaCustomResource) IsReconciledTrue() wait.ConditionFunc {
+	return func() (bool, error) {
+		dpa, err := v.Get()
+		if err != nil {
+			return false, err
+		}
+		if len(dpa.Status.Conditions) == 0 {
+			return false, nil
+		}
+		dpaType := dpa.Status.Conditions[0].Type
+		dpaStatus := dpa.Status.Conditions[0].Status
+		dpaReason := dpa.Status.Conditions[0].Reason
+		dpaMessage := dpa.Status.Conditions[0].Message
+		log.Printf("DPA status is %s: %s, reason %s: %s", dpaType, dpaStatus, dpaReason, dpaMessage)
+		return dpaType == oadpv1alpha1.ConditionReconciled &&
+			dpaStatus == metav1.ConditionTrue &&
+			dpaReason == oadpv1alpha1.ReconciledReasonComplete &&
+			dpaMessage == oadpv1alpha1.ReconcileCompleteMessage, nil
 	}
-	for _, b := range spec.BackupLocations {
-		if b.Velero.Provider == bsl.Provider {
-			if b.Velero.Config == nil {
-				b.Velero.Config = make(map[string]string)
+}
+
+func (v *DpaCustomResource) IsReconciledFalse(message string) wait.ConditionFunc {
+	return func() (bool, error) {
+		dpa, err := v.Get()
+		if err != nil {
+			return false, err
+		}
+		if len(dpa.Status.Conditions) == 0 {
+			return false, nil
+		}
+		dpaType := dpa.Status.Conditions[0].Type
+		dpaStatus := dpa.Status.Conditions[0].Status
+		dpaReason := dpa.Status.Conditions[0].Reason
+		dpaMessage := dpa.Status.Conditions[0].Message
+		log.Printf("DPA status is %s: %s, reason %s: %s", dpaType, dpaStatus, dpaReason, dpaMessage)
+		return dpaType == oadpv1alpha1.ConditionReconciled &&
+			dpaStatus == metav1.ConditionFalse &&
+			dpaReason == oadpv1alpha1.ReconciledReasonError &&
+			dpaMessage == message, nil
+	}
+}
+
+func (v *DpaCustomResource) ListBSLs() (*velero.BackupStorageLocationList, error) {
+	bsls := &velero.BackupStorageLocationList{}
+	err := v.Client.List(context.Background(), bsls, client.InNamespace(v.Namespace))
+	if err != nil {
+		return nil, err
+	}
+	if len(bsls.Items) == 0 {
+		return nil, fmt.Errorf("no BSL in %s namespace", v.Namespace)
+	}
+	return bsls, nil
+}
+
+func (v *DpaCustomResource) BSLsAreAvailable() wait.ConditionFunc {
+	return func() (bool, error) {
+		bsls, err := v.ListBSLs()
+		if err != nil {
+			return false, err
+		}
+		areAvailable := true
+		for _, bsl := range bsls.Items {
+			phase := bsl.Status.Phase
+			if len(phase) > 0 {
+				log.Printf("BSL %s phase is %s", bsl.Name, phase)
+				if phase != velero.BackupStorageLocationPhaseAvailable {
+					areAvailable = false
+				}
+			} else {
+				log.Printf("BSL %s phase is not yet set", bsl.Name)
+				areAvailable = false
 			}
-			if bsl.Config == nil {
-				bsl.Config = make(map[string]string)
+		}
+
+		return areAvailable, nil
+	}
+}
+
+func (v *DpaCustomResource) BSLsAreUpdated(updateTime time.Time) wait.ConditionFunc {
+	return func() (bool, error) {
+		bsls, err := v.ListBSLs()
+		if err != nil {
+			return false, err
+		}
+
+		for _, bsl := range bsls.Items {
+			if !bsl.Status.LastValidationTime.After(updateTime) {
+				return false, nil
 			}
-			if !reflect.DeepEqual(bsl, *b.Velero) {
-				GinkgoWriter.Print(cmp.Diff(bsl, *b.Velero))
-				return false, errors.New("given Velero bsl does not match the deployed velero bsl")
+		}
+		return true, nil
+	}
+}
+
+// check if bsl matches the spec
+func (v *DpaCustomResource) DoesBSLSpecMatchesDpa(namespace string, dpaBSLSpec velero.BackupStorageLocationSpec) (bool, error) {
+	bsls, err := v.ListBSLs()
+	if err != nil {
+		return false, err
+	}
+	for _, bslReal := range bsls.Items {
+		if bslReal.Spec.Provider == "aws" {
+			if _, exists := dpaBSLSpec.Config["checksumAlgorithm"]; !exists {
+				configWithChecksumAlgorithm := map[string]string{}
+				for key, value := range dpaBSLSpec.Config {
+					configWithChecksumAlgorithm[key] = value
+				}
+				configWithChecksumAlgorithm["checksumAlgorithm"] = ""
+				dpaBSLSpec.Config = configWithChecksumAlgorithm
 			}
+		}
+		if !reflect.DeepEqual(dpaBSLSpec, bslReal.Spec) {
+			log.Println(cmp.Diff(dpaBSLSpec, bslReal.Spec))
+			return false, errors.New("given DPA BSL spec does not match the deployed BSL")
 		}
 	}
 	return true, nil
 }
 
+func (v *DpaCustomResource) ListVSLs() (*velero.VolumeSnapshotLocationList, error) {
+	vsls := &velero.VolumeSnapshotLocationList{}
+	err := v.Client.List(context.Background(), vsls, client.InNamespace(v.Namespace))
+	if err != nil {
+		return nil, err
+	}
+	if len(vsls.Items) == 0 {
+		return nil, fmt.Errorf("no VSL in %s namespace", v.Namespace)
+	}
+	return vsls, nil
+}
+
 // check if vsl matches the spec
-func DoesVSLSpecMatchesDpa(namespace string, vslspec velero.VolumeSnapshotLocationSpec, spec *oadpv1alpha1.DataProtectionApplicationSpec) (bool, error) {
-	if len(spec.SnapshotLocations) == 0 {
-		return false, errors.New("no volume storage location configured. Expected VSL to be configured")
-	}
-	for _, v := range spec.SnapshotLocations {
-		if v.Velero.Config == nil {
-			v.Velero.Config = make(map[string]string)
-		}
-		if vslspec.Config == nil {
-			vslspec.Config = make(map[string]string)
-		}
-		if reflect.DeepEqual(vslspec, *v.Velero) {
-			GinkgoWriter.Print(cmp.Diff(vslspec, *v.Velero))
-			return true, nil
-		}
-	}
-	return false, errors.New("did not find expected VSL")
-}
-
-// check velero tolerations
-func VerifyVeleroTolerations(namespace string, t []corev1.Toleration) wait.ConditionFunc {
-	return func() (bool, error) {
-		clientset, err := setUpClient()
-		if err != nil {
-			return false, err
-		}
-
-		veldep, _ := clientset.AppsV1().Deployments(namespace).Get(context.Background(), "velero", metav1.GetOptions{})
-
-		if !reflect.DeepEqual(t, veldep.Spec.Template.Spec.Tolerations) {
-			return false, errors.New("given Velero tolerations does not match the deployed velero tolerations")
-		}
-		return true, nil
-	}
-}
-
-// check for velero resource requests
-func VerifyVeleroResourceRequests(namespace string, requests corev1.ResourceList) wait.ConditionFunc {
-	return func() (bool, error) {
-		clientset, err := setUpClient()
-		if err != nil {
-			return false, err
-		}
-		veldep, _ := clientset.AppsV1().Deployments(namespace).Get(context.Background(), "velero", metav1.GetOptions{})
-
-		for _, c := range veldep.Spec.Template.Spec.Containers {
-			if c.Name == common.Velero {
-				if !reflect.DeepEqual(requests, c.Resources.Requests) {
-					return false, errors.New("given Velero resource requests do not match the deployed velero resource requests")
-				}
-			}
-		}
-		return true, nil
-	}
-}
-
-// check for velero resource limits
-func VerifyVeleroResourceLimits(namespace string, limits corev1.ResourceList) wait.ConditionFunc {
-	return func() (bool, error) {
-		clientset, err := setUpClient()
-		if err != nil {
-			return false, err
-		}
-		veldep, _ := clientset.AppsV1().Deployments(namespace).Get(context.Background(), "velero", metav1.GetOptions{})
-
-		for _, c := range veldep.Spec.Template.Spec.Containers {
-			if c.Name == common.Velero {
-				if !reflect.DeepEqual(limits, c.Resources.Limits) {
-					return false, errors.New("given Velero resource limits do not match the deployed velero resource limits")
-				}
-			}
-		}
-		return true, nil
-	}
-}
-
-func LoadDpaSettingsFromJson(settings string) string {
-	file, err := utils.ReadFile(settings)
+func (v *DpaCustomResource) DoesVSLSpecMatchesDpa(namespace string, dpaVSLSpec velero.VolumeSnapshotLocationSpec) (bool, error) {
+	vsls, err := v.ListVSLs()
 	if err != nil {
-		return fmt.Sprintf("Error decoding json file: %v", err)
+		return false, err
 	}
-
-	Dpa = &oadpv1alpha1.DataProtectionApplication{}
-	err = json.Unmarshal(file, &Dpa)
-	if err != nil {
-		return fmt.Sprintf("Error getting settings json file: %v", err)
+	for _, vslReal := range vsls.Items {
+		if !reflect.DeepEqual(dpaVSLSpec, vslReal.Spec) {
+			log.Println(cmp.Diff(dpaVSLSpec, vslReal.Spec))
+			return false, errors.New("given DPA VSL spec does not match the deployed VSL")
+		}
 	}
-	return ""
+	return true, nil
 }

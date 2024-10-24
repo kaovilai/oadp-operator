@@ -7,60 +7,26 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
+  - config.openshift.io
+  resources:
+  - infrastructures
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - cloudcredential.openshift.io
+  resources:
+  - credentialsrequests
+  verbs:
+  - create
+- apiGroups:
   - oadp.openshift.io
   resources:
   - '*'
   verbs:
   - create
   - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - datamover.oadp.openshift.io
-  resources:
-  - '*'
-  verbs:
-  - '*'
-- apiGroups:
-  - volsync.backube
-  resources:
-  - '*'
-  verbs:
-  - '*'
-- apiGroups:
-  - snapshot.storage.k8s.io
-  resources:
-  - volumesnapshots
-  - volumesnapshotcontents
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-  - deletecollection
-- apiGroups:
-  - snapshot.storage.k8s.io
-  resources:
-  - volumesnapshotclasses
-  verbs:
-  - create
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - storage.k8s.io
-  resources:
-  - storageclasses
-  verbs:
-  - create
   - get
   - list
   - patch

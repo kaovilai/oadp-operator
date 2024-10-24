@@ -1,0 +1,15 @@
+*.md
+blogs
+bin
+.vscode
+.github
+.devcontainer
+build
+cache
+.gitignore
+./*.yml
+./*.yaml
+OWNERS
+PROJECT
+LICENSE
+Dockerfile

@@ -17,20 +17,20 @@ limitations under the License.
 package controllers
 
 import (
+	"fmt"
 	"path/filepath"
+	"runtime"
 	"testing"
 
-	. "github.com/onsi/ginkgo"
-	. "github.com/onsi/gomega"
+	"github.com/onsi/ginkgo/v2"
+	"github.com/onsi/gomega"
 	"k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
-	"sigs.k8s.io/controller-runtime/pkg/envtest/printer"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	oadpv1alpha1 "github.com/openshift/oadp-operator/api/v1alpha1"
-	//+kubebuilder:scaffold:imports
 )
 
 // These tests use Ginkgo (BDD-style Go testing framework). Refer to
@@ -40,39 +40,45 @@ var k8sClient client.Client
 var testEnv *envtest.Environment
 
 func TestAPIs(t *testing.T) {
-	RegisterFailHandler(Fail)
+	gomega.RegisterFailHandler(ginkgo.Fail)
 
-	RunSpecsWithDefaultAndCustomReporters(t,
-		"Controller Suite",
-		[]Reporter{printer.NewlineReporter{}})
+	ginkgo.RunSpecs(t, "Controllers Suite")
 }
 
-var _ = BeforeSuite(func() {
-	logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
+var _ = ginkgo.BeforeSuite(func() {
+	logf.SetLogger(zap.New(zap.WriteTo(ginkgo.GinkgoWriter), zap.UseDevMode(true)))
 
-	By("bootstrapping test environment")
+	ginkgo.By("bootstrapping test environment")
 	testEnv = &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "config", "crd", "bases")},
+		CRDDirectoryPaths:     []string{filepath.Join("..", "config", "crd", "bases"), filepath.Join("..", "hack", "extra-crds")},
 		ErrorIfCRDPathMissing: true,
+
+		// The BinaryAssetsDirectory is only required if you want to run the tests directly
+		// without call the makefile target test. If not informed it will look for the
+		// default path defined in controller-runtime which is /usr/local/kubebuilder/.
+		// Note that you must have the required binaries setup under the bin directory to perform
+		// the tests directly. When we run make test it will be setup and used automatically.
+		BinaryAssetsDirectory: filepath.Join("..", "bin", "k8s",
+			fmt.Sprintf("1.29.3-%s-%s", runtime.GOOS, runtime.GOARCH)),
 	}
 
 	cfg, err := testEnv.Start()
-	Expect(err).NotTo(HaveOccurred())
-	Expect(cfg).NotTo(BeNil())
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	gomega.Expect(cfg).NotTo(gomega.BeNil())
 
 	err = oadpv1alpha1.AddToScheme(scheme.Scheme)
-	Expect(err).NotTo(HaveOccurred())
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
 	//+kubebuilder:scaffold:scheme
 
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme.Scheme})
-	Expect(err).NotTo(HaveOccurred())
-	Expect(k8sClient).NotTo(BeNil())
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	gomega.Expect(k8sClient).NotTo(gomega.BeNil())
 
-}, 60)
+})
 
-var _ = AfterSuite(func() {
-	By("tearing down the test environment")
+var _ = ginkgo.AfterSuite(func() {
+	ginkgo.By("tearing down the test environment")
 	err := testEnv.Stop()
-	Expect(err).NotTo(HaveOccurred())
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
 })

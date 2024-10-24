@@ -18,37 +18,66 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
-	monitor "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
 	"os"
 
+	configv1 "github.com/openshift/api/config/v1"
+	routev1 "github.com/openshift/api/route/v1"
+	security "github.com/openshift/api/security/v1"
+	monitor "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
+	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	appsv1 "k8s.io/api/apps/v1"
+	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/kubernetes"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
-
-	routev1 "github.com/openshift/api/route/v1"
-	security "github.com/openshift/api/security/v1"
-	"github.com/openshift/oadp-operator/controllers"
-	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
-	appsv1 "k8s.io/api/apps/v1"
-	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	//+kubebuilder:scaffold:imports
 	oadpv1alpha1 "github.com/openshift/oadp-operator/api/v1alpha1"
+	"github.com/openshift/oadp-operator/controllers"
+	"github.com/openshift/oadp-operator/pkg/common"
+	"github.com/openshift/oadp-operator/pkg/leaderelection"
 )
 
 var (
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")
+)
+
+const (
+	// WebIdentityTokenPath mount present on operator CSV
+	WebIdentityTokenPath = "/var/run/secrets/openshift/serviceaccount/token"
+
+	// CloudCredentials API constants
+	CloudCredentialGroupVersion = "cloudcredential.openshift.io/v1"
+	CloudCredentialsCRDName     = "credentialsrequests"
+
+	// Pod security admission (PSA) labels
+	psaLabelPrefix = "pod-security.kubernetes.io/"
+	enforceLabel   = psaLabelPrefix + "enforce"
+	auditLabel     = psaLabelPrefix + "audit"
+	warnLabel      = psaLabelPrefix + "warn"
+
+	privileged = "privileged"
 )
 
 func init() {
@@ -75,27 +104,78 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
+	kubeconf := ctrl.GetConfigOrDie()
+
+	// Get LeaderElection configs
+	leConfig := leaderelection.GetLeaderElectionConfig(kubeconf, enableLeaderElection)
+
 	watchNamespace, err := getWatchNamespace()
 	if err != nil {
 		setupLog.Error(err, "unable to get WatchNamespace, "+
 			"the manager will watch and manage resources in all namespaces")
 	}
 
+	clientset, err := kubernetes.NewForConfig(kubeconf)
+	if err != nil {
+		setupLog.Error(err, "problem getting client")
+		os.Exit(1)
+	}
+
 	// setting privileged pod security labels to operator ns
-	err = addPodSecurityPrivilegedLabels(watchNamespace)
+	err = addPodSecurityPrivilegedLabels(watchNamespace, clientset)
 	if err != nil {
 		setupLog.Error(err, "error setting privileged pod security labels to operator namespace")
 		os.Exit(1)
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme:                 scheme,
-		MetricsBindAddress:     metricsAddr,
-		Port:                   9443,
+	// check if this is standardized STS workflow via OLM and CCO
+	if common.CCOWorkflow() {
+		setupLog.Info("AWS Role ARN specified by the user, following standardized STS workflow")
+		// ROLEARN env var is set via operator subscription
+		roleARN := os.Getenv("ROLEARN")
+		setupLog.Info("getting role ARN", "role ARN =", roleARN)
+
+		// check if cred request API exists in the cluster before creating a cred request
+		setupLog.Info("Checking if credentialsrequest CRD exists in the cluster")
+		credReqCRDExists, err := DoesCRDExist(CloudCredentialGroupVersion, CloudCredentialsCRDName, kubeconf)
+		if err != nil {
+			setupLog.Error(err, "problem checking the existence of CredentialRequests CRD")
+			os.Exit(1)
+		}
+
+		if credReqCRDExists {
+			// create cred request
+			setupLog.Info(fmt.Sprintf("Creating credentials request for role: %s, and WebIdentityTokenPath: %s", roleARN, WebIdentityTokenPath))
+			if err := CreateCredRequest(roleARN, WebIdentityTokenPath, watchNamespace, kubeconf); err != nil {
+				if !errors.IsAlreadyExists(err) {
+					setupLog.Error(err, "unable to create credRequest")
+					os.Exit(1)
+				}
+			}
+		}
+	}
+
+	mgr, err := ctrl.NewManager(kubeconf, ctrl.Options{
+		Scheme: scheme,
+		Metrics: metricsserver.Options{
+			BindAddress: metricsAddr,
+		},
+		WebhookServer: &webhook.DefaultServer{
+			Options: webhook.Options{
+				Port: 9443,
+			},
+		},
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "8b4defce.openshift.io",
-		Namespace:              watchNamespace,
+		LeaseDuration:          &leConfig.LeaseDuration.Duration,
+		RenewDeadline:          &leConfig.RenewDeadline.Duration,
+		RetryPeriod:            &leConfig.RetryPeriod.Duration,
+		LeaderElectionID:       "oadp.openshift.io",
+		Cache: cache.Options{
+			DefaultNamespaces: map[string]cache.Config{
+				watchNamespace: {},
+			},
+		},
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -130,6 +210,11 @@ func main() {
 
 	if err := v1.AddToScheme(mgr.GetScheme()); err != nil {
 		setupLog.Error(err, "unable to add Kubernetes API extensions to scheme")
+		os.Exit(1)
+	}
+
+	if err := configv1.AddToScheme(mgr.GetScheme()); err != nil {
+		setupLog.Error(err, "unable to add OpenShift configuration API to scheme")
 		os.Exit(1)
 	}
 
@@ -182,39 +267,109 @@ func getWatchNamespace() (string, error) {
 	return ns, nil
 }
 
-// setting privileged pod security labels to OADP operator namespace
-func addPodSecurityPrivilegedLabels(watchNamespaceName string) error {
-	setupLog.Info("patching operator namespace with PSA labels")
+// setting Pod security admission (PSA) labels to privileged in OADP operator namespace
+func addPodSecurityPrivilegedLabels(watchNamespaceName string, clientset kubernetes.Interface) error {
+	setupLog.Info("patching operator namespace with Pod security admission (PSA) labels to privileged")
 
 	if len(watchNamespaceName) == 0 {
-		return fmt.Errorf("cannot add privileged pod security labels, watchNamespaceName is empty")
+		return fmt.Errorf("cannot patch operator namespace with PSA labels to privileged, watchNamespaceName is empty")
 	}
 
-	kubeconf := ctrl.GetConfigOrDie()
-	clientset, err := kubernetes.NewForConfig(kubeconf)
+	nsPatch, err := json.Marshal(map[string]interface{}{
+		"metadata": map[string]interface{}{
+			"labels": map[string]string{
+				enforceLabel: privileged,
+				auditLabel:   privileged,
+				warnLabel:    privileged,
+			},
+		},
+	})
 	if err != nil {
-		setupLog.Error(err, "problem getting client")
+		setupLog.Error(err, "problem marshalling patches")
 		return err
 	}
-
-	operatorNamespace, err := clientset.CoreV1().Namespaces().Get(context.TODO(), watchNamespaceName, metav1.GetOptions{})
+	_, err = clientset.CoreV1().Namespaces().Patch(context.TODO(), watchNamespaceName, types.StrategicMergePatchType, nsPatch, metav1.PatchOptions{})
 	if err != nil {
-		setupLog.Error(err, "problem getting operator namespace")
+		setupLog.Error(err, "problem patching operator namespace with PSA labels to privileged")
 		return err
 	}
+	return nil
+}
 
-	privilegedLabels := map[string]string{
-		"pod-security.kubernetes.io/enforce": "privileged",
-		"pod-security.kubernetes.io/audit":   "privileged",
-		"pod-security.kubernetes.io/warn":    "privileged",
-	}
-
-	operatorNamespace.SetLabels(privilegedLabels)
-
-	_, err = clientset.CoreV1().Namespaces().Update(context.TODO(), operatorNamespace, metav1.UpdateOptions{})
+func DoesCRDExist(CRDGroupVersion, CRDName string, kubeconf *rest.Config) (bool, error) {
+	discoveryClient, err := discovery.NewDiscoveryClientForConfig(kubeconf)
 	if err != nil {
-		setupLog.Error(err, "problem patching operator namespace for privileged pod security labels")
-		return err
+		return false, err
 	}
+
+	resources, err := discoveryClient.ServerPreferredResources()
+	if err != nil {
+		return false, err
+	}
+	discoveryResult := false
+	for _, resource := range resources {
+		if resource.GroupVersion == CRDGroupVersion {
+			for _, crd := range resource.APIResources {
+				if crd.Name == CRDName {
+					discoveryResult = true
+					break
+				}
+			}
+		}
+	}
+	return discoveryResult, nil
+
+}
+
+// CreateCredRequest WITP : WebIdentityTokenPath
+func CreateCredRequest(roleARN string, WITP string, secretNS string, kubeconf *rest.Config) error {
+	clientInstance, err := client.New(kubeconf, client.Options{})
+	if err != nil {
+		setupLog.Error(err, "unable to create client")
+	}
+
+	// Extra deps were getting added and existing ones were getting upgraded when the CloudCredentials API was imported
+	// This caused updates to go.mod and started resulting in operator build failures due to incompatibility with the existing velero deps
+	// Hence for now going via the unstructured route
+	credRequest := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "cloudcredential.openshift.io/v1",
+			"kind":       "CredentialsRequest",
+			"metadata": map[string]interface{}{
+				"name":      "oadp-aws-credentials-request",
+				"namespace": "openshift-cloud-credential-operator",
+			},
+			"spec": map[string]interface{}{
+				"secretRef": map[string]interface{}{
+					"name":      "cloud-credentials",
+					"namespace": secretNS,
+				},
+				"serviceAccountNames": []interface{}{
+					common.OADPOperatorServiceAccount,
+				},
+				"providerSpec": map[string]interface{}{
+					"apiVersion": "cloudcredential.openshift.io/v1",
+					"kind":       "AWSProviderSpec",
+					"statementEntries": []interface{}{
+						map[string]interface{}{
+							"effect": "Allow",
+							"action": []interface{}{
+								"s3:*",
+							},
+							"resource": "arn:aws:s3:*:*:*",
+						},
+					},
+					"stsIAMRoleARN": roleARN,
+				},
+				"cloudTokenPath": WITP,
+			},
+		},
+	}
+
+	if err := clientInstance.Create(context.Background(), credRequest); err != nil {
+		setupLog.Error(err, "unable to create credentials request resource")
+	}
+
+	setupLog.Info("Custom resource credentialsrequest created successfully")
 	return nil
 }

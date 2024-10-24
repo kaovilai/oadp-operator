@@ -1,14 +1,20 @@
 package credentials
 
 import (
+	"context"
 	"errors"
 	"os"
 	"strings"
 
-	oadpv1alpha1 "github.com/openshift/oadp-operator/api/v1alpha1"
-	"github.com/openshift/oadp-operator/pkg/common"
+	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+
+	oadpv1alpha1 "github.com/openshift/oadp-operator/api/v1alpha1"
+	"github.com/openshift/oadp-operator/pkg/client"
+	"github.com/openshift/oadp-operator/pkg/common"
 )
 
 type DefaultPluginFields struct {
@@ -19,10 +25,11 @@ type DefaultPluginFields struct {
 	PluginImage        string
 	PluginSecretKey    string
 	PluginName         string
+	ProviderName       string
 }
 
 const (
-	cloudFieldPath = "cloud"
+	CloudFieldPath = "cloud"
 )
 
 var (
@@ -33,6 +40,16 @@ var (
 			MountPath:          "/credentials",
 			EnvCredentialsFile: common.AWSSharedCredentialsFileEnvKey,
 			PluginName:         common.VeleroPluginForAWS,
+			ProviderName:       string(oadpv1alpha1.DefaultPluginAWS),
+			PluginSecretKey:    "cloud",
+		},
+		oadpv1alpha1.DefaultPluginLegacyAWS: {
+			IsCloudProvider:    true,
+			SecretName:         "cloud-credentials",
+			MountPath:          "/credentials",
+			EnvCredentialsFile: common.AWSSharedCredentialsFileEnvKey,
+			PluginName:         common.VeleroPluginForLegacyAWS,
+			ProviderName:       string(oadpv1alpha1.DefaultPluginAWS),
 			PluginSecretKey:    "cloud",
 		},
 		oadpv1alpha1.DefaultPluginGCP: {
@@ -41,6 +58,7 @@ var (
 			MountPath:          "/credentials-gcp",
 			EnvCredentialsFile: common.GCPCredentialsEnvKey,
 			PluginName:         common.VeleroPluginForGCP,
+			ProviderName:       string(oadpv1alpha1.DefaultPluginGCP),
 			PluginSecretKey:    "cloud",
 		},
 		oadpv1alpha1.DefaultPluginMicrosoftAzure: {
@@ -49,20 +67,12 @@ var (
 			MountPath:          "/credentials-azure",
 			EnvCredentialsFile: common.AzureCredentialsFileEnvKey,
 			PluginName:         common.VeleroPluginForAzure,
+			ProviderName:       string(oadpv1alpha1.DefaultPluginMicrosoftAzure),
 			PluginSecretKey:    "cloud",
 		},
 		oadpv1alpha1.DefaultPluginOpenShift: {
 			IsCloudProvider: false,
 			PluginName:      common.VeleroPluginForOpenshift,
-		},
-		oadpv1alpha1.DefaultPluginCSI: {
-			IsCloudProvider: false,
-			//TODO: Check if the Registry needs to an upstream one from CSI
-			PluginName: common.VeleroPluginForCSI,
-		},
-		oadpv1alpha1.DefaultPluginVSM: {
-			IsCloudProvider: false,
-			PluginName:      common.VeleroPluginForVSM,
 		},
 		oadpv1alpha1.DefaultPluginKubeVirt: {
 			IsCloudProvider: false,
@@ -99,24 +109,14 @@ func getAWSPluginImage(dpa *oadpv1alpha1.DataProtectionApplication) string {
 	return os.Getenv("RELATED_IMAGE_VELERO_PLUGIN_FOR_AWS")
 }
 
-func getCSIPluginImage(dpa *oadpv1alpha1.DataProtectionApplication) string {
-	if dpa.Spec.UnsupportedOverrides[oadpv1alpha1.CSIPluginImageKey] != "" {
-		return dpa.Spec.UnsupportedOverrides[oadpv1alpha1.CSIPluginImageKey]
+func getLegacyAWSPluginImage(dpa *oadpv1alpha1.DataProtectionApplication) string {
+	if dpa.Spec.UnsupportedOverrides[oadpv1alpha1.LegacyAWSPluginImageKey] != "" {
+		return dpa.Spec.UnsupportedOverrides[oadpv1alpha1.LegacyAWSPluginImageKey]
 	}
-	if os.Getenv("RELATED_IMAGE_VELERO_PLUGIN_FOR_CSI") == "" {
-		return common.CSIPluginImage
+	if os.Getenv("RELATED_IMAGE_VELERO_PLUGIN_FOR_LEGACY_AWS") == "" {
+		return common.LegacyAWSPluginImage
 	}
-	return os.Getenv("RELATED_IMAGE_VELERO_PLUGIN_FOR_CSI")
-}
-
-func getVSMPluginImage(dpa *oadpv1alpha1.DataProtectionApplication) string {
-	if dpa.Spec.UnsupportedOverrides[oadpv1alpha1.VSMPluginImageKey] != "" {
-		return dpa.Spec.UnsupportedOverrides[oadpv1alpha1.VSMPluginImageKey]
-	}
-	if os.Getenv("RELATED_IMAGE_VELERO_PLUGIN_FOR_VSM") == "" {
-		return common.VSMPluginImage
-	}
-	return os.Getenv("RELATED_IMAGE_VELERO_PLUGIN_FOR_VSM")
+	return os.Getenv("RELATED_IMAGE_VELERO_PLUGIN_FOR_LEGACY_AWS")
 }
 
 func getGCPPluginImage(dpa *oadpv1alpha1.DataProtectionApplication) string {
@@ -159,28 +159,25 @@ func getKubeVirtPluginImage(dpa *oadpv1alpha1.DataProtectionApplication) string 
 	return os.Getenv("RELATED_IMAGE_KUBEVIRT_VELERO_PLUGIN")
 }
 
-func getPluginImage(pluginName string, dpa *oadpv1alpha1.DataProtectionApplication) string {
-	switch pluginName {
+func GetPluginImage(defaultPlugin oadpv1alpha1.DefaultPlugin, dpa *oadpv1alpha1.DataProtectionApplication) string {
+	switch defaultPlugin {
 
-	case common.VeleroPluginForAWS:
+	case oadpv1alpha1.DefaultPluginAWS:
 		return getAWSPluginImage(dpa)
 
-	case common.VeleroPluginForCSI:
-		return getCSIPluginImage(dpa)
+	case oadpv1alpha1.DefaultPluginLegacyAWS:
+		return getLegacyAWSPluginImage(dpa)
 
-	case common.VeleroPluginForVSM:
-		return getVSMPluginImage(dpa)
-
-	case common.VeleroPluginForGCP:
+	case oadpv1alpha1.DefaultPluginGCP:
 		return getGCPPluginImage(dpa)
 
-	case common.VeleroPluginForOpenshift:
+	case oadpv1alpha1.DefaultPluginOpenShift:
 		return getOpenshiftPluginImage(dpa)
 
-	case common.VeleroPluginForAzure:
+	case oadpv1alpha1.DefaultPluginMicrosoftAzure:
 		return getAzurePluginImage(dpa)
 
-	case common.KubeVirtPlugin:
+	case oadpv1alpha1.DefaultPluginKubeVirt:
 		return getKubeVirtPluginImage(dpa)
 	}
 	return ""
@@ -207,7 +204,8 @@ func AppendCloudProviderVolumes(dpa *oadpv1alpha1.DataProtectionApplication, ds 
 			(!dpa.Spec.Configuration.Velero.NoDefaultBackupLocation || // it has a backup location in OADP/velero context OR
 				dpa.Spec.UnsupportedOverrides[oadpv1alpha1.OperatorTypeKey] == oadpv1alpha1.OperatorTypeMTC) { // OADP is installed via MTC
 
-			pluginNeedsCheck, foundProviderPlugin := providerNeedsDefaultCreds[string(plugin)]
+			pluginNeedsCheck, foundProviderPlugin := providerNeedsDefaultCreds[cloudProviderMap.ProviderName]
+			// duplication with controllers/validator.go
 			if !foundProviderPlugin && !hasCloudStorage {
 				pluginNeedsCheck = true
 			}
@@ -242,7 +240,7 @@ func AppendCloudProviderVolumes(dpa *oadpv1alpha1.DataProtectionApplication, ds 
 					resticContainer.Env,
 					corev1.EnvVar{
 						Name:  cloudProviderMap.EnvCredentialsFile,
-						Value: cloudProviderMap.MountPath + "/" + cloudFieldPath,
+						Value: cloudProviderMap.MountPath + "/" + CloudFieldPath,
 					},
 				)
 			}
@@ -250,117 +248,151 @@ func AppendCloudProviderVolumes(dpa *oadpv1alpha1.DataProtectionApplication, ds 
 		}
 	}
 	for _, bslSpec := range dpa.Spec.BackupLocations {
-		if _, ok := bslSpec.Velero.Config["credentialsFile"]; ok {
-			if secretName, err := GetSecretNameFromCredentialsFileConfigString(bslSpec.Velero.Config["credentialsFile"]); err == nil {
-				ds.Spec.Template.Spec.Volumes = append(
-					ds.Spec.Template.Spec.Volumes,
-					corev1.Volume{
-						Name: secretName,
-						VolumeSource: corev1.VolumeSource{
-							Secret: &corev1.SecretVolumeSource{
-								SecretName: secretName,
+		if bslSpec.Velero != nil {
+			if _, ok := bslSpec.Velero.Config["credentialsFile"]; ok {
+				if secretName, err := GetSecretNameFromCredentialsFileConfigString(bslSpec.Velero.Config["credentialsFile"]); err == nil {
+					ds.Spec.Template.Spec.Volumes = append(
+						ds.Spec.Template.Spec.Volumes,
+						corev1.Volume{
+							Name: secretName,
+							VolumeSource: corev1.VolumeSource{
+								Secret: &corev1.SecretVolumeSource{
+									SecretName: secretName,
+								},
 							},
 						},
-					},
-				)
+					)
+				}
 			}
 		}
+
 	}
 	return nil
 }
 
-// add plugin specific specs to velero deployment
-func AppendPluginSpecificSpecs(dpa *oadpv1alpha1.DataProtectionApplication, veleroDeployment *appsv1.Deployment, veleroContainer *corev1.Container, providerNeedsDefaultCreds map[string]bool, hasCloudStorage bool) error {
-
-	init_container_resources := veleroContainer.Resources
-
-	for _, plugin := range dpa.Spec.Configuration.Velero.DefaultPlugins {
-		if pluginSpecificMap, ok := PluginSpecificFields[plugin]; ok {
-			veleroDeployment.Spec.Template.Spec.InitContainers = append(
-				veleroDeployment.Spec.Template.Spec.InitContainers,
-				corev1.Container{
-					Image:                    getPluginImage(pluginSpecificMap.PluginName, dpa),
-					Name:                     pluginSpecificMap.PluginName,
-					ImagePullPolicy:          corev1.PullAlways,
-					Resources:                init_container_resources,
-					TerminationMessagePath:   "/dev/termination-log",
-					TerminationMessagePolicy: "File",
-					VolumeMounts: []corev1.VolumeMount{
-						{
-							MountPath: "/target",
-							Name:      "plugins",
-						},
-					},
-				})
-
-			pluginNeedsCheck, foundInBSLorVSL := providerNeedsDefaultCreds[string(plugin)]
-
-			if !foundInBSLorVSL && !hasCloudStorage {
-				pluginNeedsCheck = true
-			}
-
-			if !pluginSpecificMap.IsCloudProvider || !pluginNeedsCheck {
-				continue
-			}
-			if dpa.Spec.Configuration.Velero.NoDefaultBackupLocation &&
-				dpa.Spec.UnsupportedOverrides[oadpv1alpha1.OperatorTypeKey] != oadpv1alpha1.OperatorTypeMTC &&
-				pluginSpecificMap.IsCloudProvider {
-				continue
-			}
-			// set default secret name to use
-			secretName := pluginSpecificMap.SecretName
-			// append plugin specific volume mounts
-			if veleroContainer != nil {
-				veleroContainer.VolumeMounts = append(
-					veleroContainer.VolumeMounts,
-					corev1.VolumeMount{
-						Name:      secretName,
-						MountPath: pluginSpecificMap.MountPath,
-					})
-
-				// append plugin specific env vars
-				veleroContainer.Env = append(
-					veleroContainer.Env,
-					corev1.EnvVar{
-						Name:  pluginSpecificMap.EnvCredentialsFile,
-						Value: pluginSpecificMap.MountPath + "/" + cloudFieldPath,
-					})
-			}
-
-			// append plugin specific volumes
-			veleroDeployment.Spec.Template.Spec.Volumes = append(
-				veleroDeployment.Spec.Template.Spec.Volumes,
-				corev1.Volume{
-					Name: secretName,
-					VolumeSource: corev1.VolumeSource{
-						Secret: &corev1.SecretVolumeSource{
-							SecretName:  secretName,
-							DefaultMode: common.DefaultModePtr(),
-						},
-					},
-				})
+// TODO: remove duplicate func in registry.go - refactoring away registry.go later
+func GetSecretNameAndKey(bslSpec *velerov1.BackupStorageLocationSpec, plugin oadpv1alpha1.DefaultPlugin) (string, string) {
+	// Assume default values unless user has overriden them
+	secretName := PluginSpecificFields[plugin].SecretName
+	secretKey := PluginSpecificFields[plugin].PluginSecretKey
+	if _, ok := bslSpec.Config["credentialsFile"]; ok {
+		if secretName, secretKey, err :=
+			GetSecretNameKeyFromCredentialsFileConfigString(bslSpec.Config["credentialsFile"]); err == nil {
+			return secretName, secretKey
 		}
 	}
-	// append custom plugin init containers
-	if dpa.Spec.Configuration.Velero.CustomPlugins != nil {
-		for _, plugin := range dpa.Spec.Configuration.Velero.CustomPlugins {
-			veleroDeployment.Spec.Template.Spec.InitContainers = append(
-				veleroDeployment.Spec.Template.Spec.InitContainers,
-				corev1.Container{
-					Image:                    plugin.Image,
-					Name:                     plugin.Name,
-					ImagePullPolicy:          corev1.PullAlways,
-					Resources:                init_container_resources,
-					TerminationMessagePath:   "/dev/termination-log",
-					TerminationMessagePolicy: "File",
-					VolumeMounts: []corev1.VolumeMount{
-						{
-							MountPath: "/target",
-							Name:      "plugins",
-						},
-					},
-				})
+	// check if user specified the Credential Name and Key
+	credential := bslSpec.Credential
+	if credential != nil {
+		if len(credential.Name) > 0 {
+			secretName = credential.Name
+		}
+		if len(credential.Key) > 0 {
+			secretKey = credential.Key
 		}
 	}
-	return nil
+
+	return secretName, secretKey
+}
+
+// TODO: remove duplicate func in registry.go - refactoring away registry.go later
+// Get for a given backup location
+// - secret name
+// - key
+// - bsl config
+// - provider
+// - error
+func GetSecretNameKeyConfigProviderForBackupLocation(blspec oadpv1alpha1.BackupLocation, namespace string) (string, string, string, map[string]string, error) {
+	if blspec.Velero != nil {
+		name, key := GetSecretNameAndKey(blspec.Velero, oadpv1alpha1.DefaultPlugin(blspec.Velero.Provider))
+		return name, key, blspec.Velero.Provider, blspec.Velero.Config, nil
+	}
+	if blspec.CloudStorage != nil {
+		if blspec.CloudStorage.Credential != nil {
+			// Get CloudStorageRef provider
+			cs := oadpv1alpha1.CloudStorage{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      blspec.CloudStorage.CloudStorageRef.Name,
+					Namespace: namespace,
+				},
+			}
+			err := client.GetClient().Get(context.Background(), types.NamespacedName{Namespace: namespace, Name: blspec.CloudStorage.CloudStorageRef.Name}, &cs)
+			if err != nil {
+				return "", "", "", nil, err
+			}
+			return blspec.CloudStorage.Credential.Name, blspec.CloudStorage.Credential.Key, string(cs.Spec.Provider), blspec.CloudStorage.Config, nil
+		}
+	}
+	return "", "", "", nil, nil
+}
+
+// Iterate through all backup locations and return true if any of them use short lived credentials
+func BslUsesShortLivedCredential(bls []oadpv1alpha1.BackupLocation, namespace string) (ret bool, err error) {
+	for _, blspec := range bls {
+		if blspec.CloudStorage != nil && blspec.CloudStorage.Credential != nil {
+			// Get CloudStorageRef provider
+			cs := oadpv1alpha1.CloudStorage{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      blspec.CloudStorage.CloudStorageRef.Name,
+					Namespace: namespace,
+				},
+			}
+			err = client.GetClient().Get(context.Background(), types.NamespacedName{Namespace: namespace, Name: blspec.CloudStorage.CloudStorageRef.Name}, &cs)
+			if err != nil {
+				return false, err
+			}
+			if cs.Spec.EnableSharedConfig != nil && *cs.Spec.EnableSharedConfig {
+				return true, nil
+			}
+		}
+		secretName, secretKey, provider, config, err := GetSecretNameKeyConfigProviderForBackupLocation(blspec, namespace)
+		if err != nil {
+			return false, err
+		}
+		ret, err = SecretContainsShortLivedCredential(secretName, secretKey, provider, namespace, config)
+		if err != nil {
+			return false, err
+		}
+		if ret {
+			return true, nil
+		}
+	}
+	return ret, err
+}
+
+func SecretContainsShortLivedCredential(secretName, secretKey, provider, namespace string, config map[string]string) (bool, error) {
+	switch provider {
+	case "aws":
+		// AWS credentials short lived are determined by enableSharedConfig
+		// if enableSharedConfig is not set, then we assume it is not short lived
+		// if enableSharedConfig is set, then we assume it is short lived
+		// Alternatively, we can check if the secret contains a session token
+		// TODO: check if secret contains session token
+		return false, nil
+	case "gcp":
+		return gcpSecretAccountTypeIsShortLived(secretName, secretKey, namespace)
+	case "azure":
+		// TODO: check if secret contains session token
+		return false, nil
+	}
+	return false, nil
+}
+
+func GetDecodedSecret(secretName, secretKey, namespace string) (s string, err error) {
+	bytes, err := GetDecodedSecretAsByte(secretName, secretKey, namespace)
+	return string(bytes), err
+}
+
+func GetDecodedSecretAsByte(secretName, secretKey, namespace string) ([]byte, error) {
+	if secretName != "" && secretKey != "" {
+		var secret corev1.Secret
+		err := client.GetClient().Get(context.Background(), types.NamespacedName{Namespace: namespace, Name: secretName}, &secret)
+		if err != nil {
+			return []byte{}, errors.Join(errors.New("error getting provider secret"+secretName), err)
+		}
+		if secret.Data[secretKey] != nil {
+			return secret.Data[secretKey], nil
+		}
+	}
+	return []byte{}, nil
 }

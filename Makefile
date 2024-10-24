@@ -17,8 +17,6 @@ VSL_REGION ?= ${LEASED_RESOURCE}
 BSL_AWS_PROFILE ?= default
 # BSL_AWS_PROFILE ?= migration-engineering
 
-# vsl secret
-CREDS_SECRET_REF ?= cloud-credentials
 # bucket file
 OADP_BUCKET_FILE ?= ${OADP_CRED_DIR}/new-velero-bucket-name
 # azure cluster resource file - only in CI
@@ -29,21 +27,25 @@ AZURE_OADP_JSON_CRED_FILE ?= ${OADP_CRED_DIR}/azure-credentials
 # Misc
 OPENSHIFT_CI ?= true
 VELERO_INSTANCE_NAME ?= velero-test
-E2E_TIMEOUT_MULTIPLIER ?= 1
 ARTIFACT_DIR ?= /tmp
 OC_CLI = $(shell which oc)
+TEST_VIRT ?= false
+KVM_EMULATION ?= true
+TEST_UPGRADE ?= false
+HCO_UPSTREAM ?= false
 
 ifdef CLI_DIR
 	OC_CLI = ${CLI_DIR}/oc
 endif
-
-CLUSTER_TYPE ?= $(shell $(OC_CLI) get infrastructures cluster -o jsonpath='{.status.platform}' | tr A-Z a-z)
-$(info $$CLUSTER_TYPE is [${CLUSTER_TYPE}])
+# makes CLUSTER_TYPE quieter when unauthenticated
+CLUSTER_TYPE_SHELL := $(shell $(OC_CLI) get infrastructures cluster -o jsonpath='{.status.platform}' 2> /dev/null | tr A-Z a-z)
+CLUSTER_TYPE ?= $(CLUSTER_TYPE_SHELL)
+CLUSTER_OS = $(shell $(OC_CLI) get node -o jsonpath='{.items[0].status.nodeInfo.operatingSystem}' 2> /dev/null)
+CLUSTER_ARCH = $(shell $(OC_CLI) get node -o jsonpath='{.items[0].status.nodeInfo.architecture}' 2> /dev/null)
 
 ifeq ($(CLUSTER_TYPE), gcp)
 	CI_CRED_FILE = ${CLUSTER_PROFILE_DIR}/gce.json
 	OADP_CRED_FILE = ${OADP_CRED_DIR}/gcp-credentials
-	CREDS_SECRET_REF = cloud-credentials-gcp
 	OADP_BUCKET_FILE = ${OADP_CRED_DIR}/gcp-velero-bucket-name
 endif
 
@@ -54,31 +56,30 @@ endif
 ifeq ($(CLUSTER_TYPE), azure)
 	CI_CRED_FILE = /tmp/ci-azure-credentials
 	OADP_CRED_FILE = /tmp/oadp-azure-credentials
-	CREDS_SECRET_REF = cloud-credentials-azure
 	OADP_BUCKET_FILE = ${OADP_CRED_DIR}/azure-velero-bucket-name
 endif
 
 VELERO_PLUGIN ?= ${CLUSTER_TYPE}
 
 ifeq ($(CLUSTER_TYPE), ibmcloud)
-	VELERO_PLUGIN ?= aws
+	VELERO_PLUGIN = aws
 endif
 
-# ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
-ENVTEST_K8S_VERSION = 1.21
+ifeq ($(CLUSTER_TYPE), openstack)
+	KVM_EMULATION = false
+endif
 
-.PHONY:ginkgo
-ginkgo: # Make sure ginkgo is in $GOPATH/bin
-	go get -d github.com/onsi/ginkgo/ginkgo
-	go get -d github.com/onsi/ginkgo/v2/ginkgo
-	go get -d github.com/onsi/gomega/...
+# Kubernetes version from OpenShift 4.16.x https://openshift-release.apps.ci.l2s4.p1.openshiftapps.com/#4-stable
+# ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
+ENVTEST_K8S_VERSION = 1.29
 
 # VERSION defines the project version for the bundle.
 # Update this value when you upgrade the version of your project.
 # To re-generate a bundle for another specific version without changing the standard setup, you can:
 # - use the VERSION as arg of the bundle target (e.g make bundle VERSION=0.0.2)
 # - use environment variables to overwrite this value (e.g export VERSION=0.0.2)
-VERSION ?= 99.0.0
+DEFAULT_VERSION := 99.0.0
+VERSION ?= $(DEFAULT_VERSION)
 
 # CHANNELS define the bundle channels used in the bundle.
 # Add a new line here if you would like to change its default config. (E.g CHANNELS = "candidate,fast,stable")
@@ -114,8 +115,7 @@ BUNDLE_IMG ?= $(IMAGE_TAG_BASE)-bundle:v$(VERSION)
 
 # Image URL to use all building/pushing image targets
 IMG ?= quay.io/konveyor/oadp-operator:latest
-# Produce CRDs that work back to Kubernetes 1.11 (no version conversion)
-CRD_OPTIONS ?= "crd:trivialVersions=true,preserveUnknownFields=false"
+CRD_OPTIONS ?= "crd"
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -168,18 +168,42 @@ vet: ## Run go vet against code.
 	go vet -mod=mod ./...
 
 ENVTEST := $(shell pwd)/bin/setup-envtest
-ENVTESTPATH = $(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) -p path)
+ENVTESTPATH = $(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(shell pwd)/bin -p path)
 ifeq ($(shell $(ENVTEST) list | grep $(ENVTEST_K8S_VERSION)),)
 	ENVTESTPATH = $(shell $(ENVTEST) --arch=amd64 use $(ENVTEST_K8S_VERSION) -p path)
 endif
+$(ENVTEST): ## Download envtest-setup locally if necessary.
+	$(call go-install-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.0.0-20240320141353-395cfc7486e6)
 
-test: manifests nullables generate fmt vet envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(ENVTESTPATH)" go test -mod=mod ./controllers/... ./pkg/... -coverprofile cover.out
+.PHONY: envtest
+envtest: $(ENVTEST)
 
-# if there is no native arch available, attempt to use amd64
-ci-test: ## This assumes "manifests generate fmt vet envtest" ran.
-	KUBEBUILDER_ASSETS="$(ENVTESTPATH)" go test -mod=mod ./controllers/... -coverprofile cover.out
+# If test results in prow are different, it is because the environment used.
+# You can simulate their env by running
+# docker run --platform linux/amd64 -w $PWD -v $PWD:$PWD -it registry.ci.openshift.org/ocp/builder:rhel-8-golang-1.20-openshift-4.14 sh -c "make test"
+# where the image corresponds to the prow config for the test job, https://github.com/openshift/release/blob/master/ci-operator/config/openshift/oadp-operator/openshift-oadp-operator-master.yaml#L1-L5
+# to login to registry cluster follow https://docs.ci.openshift.org/docs/how-tos/use-registries-in-build-farm/#how-do-i-log-in-to-pull-images-that-require-authentication
+# If bin/ contains binaries of different arch, you may remove them so the container can install their arch.
+.PHONY: test
+test: vet envtest ## Run unit tests; run Go linters checks; check if api and bundle folders are up to date; and check if go dependencies are valid
+	KUBEBUILDER_ASSETS="$(ENVTESTPATH)" go test -mod=mod $(shell go list -mod=mod ./... | grep -v /tests/e2e) -coverprofile cover.out
+	@make lint
+	@make api-isupdated
+	@make bundle-isupdated
+	@make check-go-dependencies
 
+.PHONY: api-isupdated
+api-isupdated: TEMP:= $(shell mktemp -d)
+api-isupdated:
+	@cp -r ./ $(TEMP) && cd $(TEMP) && make generate && cd - && diff -ruN api/ $(TEMP)/api/ && echo "api is up to date" || (echo "api is out of date, run 'make generate' to update" && exit 1)
+	@chmod -R 777 $(TEMP) && rm -rf $(TEMP)
+
+.PHONY: bundle-isupdated
+bundle-isupdated: TEMP:= $(shell mktemp -d)
+bundle-isupdated: VERSION:= $(DEFAULT_VERSION) #prevent VERSION overrides from https://github.com/openshift/release/blob/f1a388ab05d493b6d95b8908e28687b4c0679498/clusters/build-clusters/01_cluster/ci/_origin-release-build/golang-1.19/Dockerfile#LL9C1-L9C1
+bundle-isupdated:
+	@cp -r ./ $(TEMP) && cd $(TEMP) && make bundle && cd - && diff -ruN bundle/ $(TEMP)/bundle/ && echo "bundle is up to date" || (echo "bundle is out of date, run 'make bundle' to update" && exit 1)
+	@chmod -R 777 $(TEMP) && rm -rf $(TEMP)
 
 ##@ Build
 
@@ -189,14 +213,15 @@ build: generate fmt vet ## Build manager binary.
 run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./main.go
 
-# Development clusters require linux/amd64 OCI image
-# Set platform to linux/amd64 regardless of host platform.
 # If using podman machine, and host platform is not linux/amd64 run
 # - podman machine ssh sudo rpm-ostree install qemu-user-static && sudo systemctl reboot
 # from: https://github.com/containers/podman/issues/12144#issuecomment-955760527
 # related enhancements that may remove the need to manually install qemu-user-static https://bugzilla.redhat.com/show_bug.cgi?id=2061584
 DOCKER_BUILD_ARGS ?= --platform=linux/amd64
-docker-build: test ## Build docker image with the manager.
+ifneq ($(CLUSTER_TYPE),)
+	DOCKER_BUILD_ARGS = --platform=$(CLUSTER_OS)/$(CLUSTER_ARCH)
+endif
+docker-build: ## Build docker image with the manager.
 	docker build -t $(IMG) . $(DOCKER_BUILD_ARGS)
 
 docker-push: ## Push docker image with the manager.
@@ -235,15 +260,11 @@ build-deploy: ## Build current branch image and deploy controller to the k8s clu
 
 CONTROLLER_GEN = $(shell pwd)/bin/controller-gen
 controller-gen: ## Download controller-gen locally if necessary.
-	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen@v0.6.1)
+	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen@v0.14.0)
 
 KUSTOMIZE = $(shell pwd)/bin/kustomize
 kustomize: ## Download kustomize locally if necessary.
 	$(call go-install-tool,$(KUSTOMIZE),sigs.k8s.io/kustomize/kustomize/v4@v4.5.5)
-
-ENVTEST = $(shell pwd)/bin/setup-envtest
-envtest: ## Download envtest-setup locally if necessary.
-	$(call go-install-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest@latest)
 
 # Codecov OS String for use in download url
 ifeq ($(OS),Windows_NT)
@@ -260,15 +281,8 @@ endif
 submit-coverage:
 	curl -Os https://uploader.codecov.io/latest/$(OS_String)/codecov
 	chmod +x codecov
-	./codecov > tmp.results 2> tmp.err
-	cat tmp.results || echo "tmp.results not found"
-	cat tmp.err || echo "tmp.err not found"
-	@echo $$(cat tmp.results | grep 'resultURL' -c)
-	@echo $$(cat tmp.err | grep 'please specify sha and slug manually' -c)
-	if [ $$(cat tmp.err | grep 'please specify sha and slug manually' -c) == 1 ]; then \
-		echo "specifying sha and slug manually" && ./codecov -C $(shell git rev-parse HEAD) -r openshift/oadp-operator; \
-	fi
-	rm -f codecov tmp.*
+	./codecov -C $(shell git rev-parse HEAD) -r openshift/oadp-operator --nonZero
+	rm -f codecov
 
 # go-install-tool will 'go install' any package $2 and install it to $1.
 PROJECT_DIR := $(shell dirname $(abspath $(lastword $(MAKEFILE_LIST))))
@@ -294,20 +308,22 @@ operator-sdk:
 	# Download operator-sdk locally if does not exist
 	if [ ! -f $(OPERATOR_SDK) ]; then \
 		mkdir -p bin ;\
-		curl -Lo $(OPERATOR_SDK) https://github.com/operator-framework/operator-sdk/releases/download/v1.23.0/operator-sdk_$(shell go env GOOS)_$(shell go env GOARCH) ; \
+		curl -Lo $(OPERATOR_SDK) https://github.com/operator-framework/operator-sdk/releases/download/v1.34.2/operator-sdk_$(shell go env GOOS)_$(shell go env GOARCH) ; \
 		chmod +x $(OPERATOR_SDK); \
 	fi
 
 .PHONY: bundle
 bundle: manifests kustomize operator-sdk ## Generate bundle manifests and metadata, then validate generated files.
-	$(OPERATOR_SDK) generate kustomize manifests -q
-	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
-	$(KUSTOMIZE) build config/manifests | $(OPERATOR_SDK) generate bundle -q --extra-service-accounts "velero" --overwrite --version $(VERSION) $(BUNDLE_METADATA_OPTS)
+	GOFLAGS="-mod=mod" $(OPERATOR_SDK) generate kustomize manifests -q
+	cd config/manager && GOFLAGS="-mod=mod" $(KUSTOMIZE) edit set image controller=$(IMG)
+	GOFLAGS="-mod=mod" $(KUSTOMIZE) build config/manifests | GOFLAGS="-mod=mod" $(OPERATOR_SDK) generate bundle -q --extra-service-accounts "velero,non-admin-controller" --overwrite --version $(VERSION) $(BUNDLE_METADATA_OPTS)
 	@make nullables
 	# Copy updated bundle.Dockerfile to CI's Dockerfile.bundle
 	# TODO: update CI to use generated one
 	cp bundle.Dockerfile build/Dockerfile.bundle
-	$(OPERATOR_SDK) bundle validate ./bundle
+	GOFLAGS="-mod=mod" $(OPERATOR_SDK) bundle validate ./bundle
+	sed -e 's/    createdAt: .*/$(shell grep -I '^    createdAt: ' bundle/manifests/oadp-operator.clusterserviceversion.yaml)/' bundle/manifests/oadp-operator.clusterserviceversion.yaml > bundle/manifests/oadp-operator.clusterserviceversion.yaml.tmp
+	mv bundle/manifests/oadp-operator.clusterserviceversion.yaml.tmp bundle/manifests/oadp-operator.clusterserviceversion.yaml
 
 .PHONY: nullables
 nullables:
@@ -346,7 +362,7 @@ nullable-crds-bundle: yq
 .PHONY: nullable-crds-config
 nullable-crds-config: DPA_CRD_YAML ?= config/crd/bases/oadp.openshift.io_dataprotectionapplications.yaml
 nullable-crds-config:
-	DPA_CRD_YAML=$(DPA_CRD_YAML) make nullable-crds-bundle
+	@ DPA_CRD_YAML=$(DPA_CRD_YAML) make nullable-crds-bundle
 
 .PHONY: bundle-build
 bundle-build: ## Build the bundle image.
@@ -361,18 +377,21 @@ GIT_REV:=$(shell git rev-parse --short HEAD)
 deploy-olm: THIS_OPERATOR_IMAGE?=ttl.sh/oadp-operator-$(GIT_REV):1h # Set target specific variable
 deploy-olm: THIS_BUNDLE_IMAGE?=ttl.sh/oadp-operator-bundle-$(GIT_REV):1h # Set target specific variable
 deploy-olm: DEPLOY_TMP:=$(shell mktemp -d)/ # Set target specific variable
-deploy-olm: operator-sdk ## Build current branch operator image, bundle image, push and install via OLM
-	oc whoami # Check if logged in
-	oc create namespace $(OADP_TEST_NAMESPACE) || true
-	$(OPERATOR_SDK) cleanup oadp-operator --namespace $(OADP_TEST_NAMESPACE)
+deploy-olm: undeploy-olm ## Build current branch operator image, bundle image, push and install via OLM
 	@echo "DEPLOY_TMP: $(DEPLOY_TMP)"
 	# build and push operator and bundle image
 	# use $(OPERATOR_SDK) to install bundle to authenticated cluster
 	cp -r . $(DEPLOY_TMP) && cd $(DEPLOY_TMP) && \
 	IMG=$(THIS_OPERATOR_IMAGE) BUNDLE_IMG=$(THIS_BUNDLE_IMAGE) \
 		make docker-build docker-push bundle bundle-build bundle-push; \
-	rm -rf $(DEPLOY_TMP)
-	$(OPERATOR_SDK) run bundle $(THIS_BUNDLE_IMAGE) --namespace $(OADP_TEST_NAMESPACE)
+	chmod -R 777 $(DEPLOY_TMP) && rm -rf $(DEPLOY_TMP)
+	$(OPERATOR_SDK) run bundle --security-context-config restricted $(THIS_BUNDLE_IMAGE) --namespace $(OADP_TEST_NAMESPACE)
+
+.PHONY: undeploy-olm
+undeploy-olm: login-required operator-sdk ## Uninstall current branch operator via OLM
+	$(OC_CLI) whoami # Check if logged in
+	$(OC_CLI) create namespace $(OADP_TEST_NAMESPACE) || true
+	$(OPERATOR_SDK) cleanup oadp-operator --namespace $(OADP_TEST_NAMESPACE)
 
 .PHONY: opm
 OPM = ./bin/opm
@@ -420,31 +439,151 @@ catalog-build-replaces: opm ## Build a catalog image using replace mode
 catalog-push: ## Push a catalog image.
 	$(MAKE) docker-push IMG=$(CATALOG_IMG)
 
-OADP_BUCKET = $(shell cat $(OADP_BUCKET_FILE))
-TEST_FILTER := ($(shell echo '! aws && ! gcp && ! azure && ! ibmcloud' | \
-sed -r "s/[&]* [!] $(CLUSTER_TYPE)|[!] $(CLUSTER_TYPE) [&]*//")) || $(CLUSTER_TYPE)
+# A valid Git branch from https://github.com/openshift/oadp-operator
+PREVIOUS_CHANNEL ?= oadp-1.4
+# Go version in go.mod in that branch
+PREVIOUS_CHANNEL_GO_VERSION ?= 1.22
+
+.PHONY: catalog-test-upgrade
+catalog-test-upgrade: PREVIOUS_OPERATOR_IMAGE?=ttl.sh/oadp-operator-previous-$(GIT_REV):1h
+catalog-test-upgrade: PREVIOUS_BUNDLE_IMAGE?=ttl.sh/oadp-operator-previous-bundle-$(GIT_REV):1h
+catalog-test-upgrade: THIS_OPERATOR_IMAGE?=ttl.sh/oadp-operator-$(GIT_REV):1h
+catalog-test-upgrade: THIS_BUNDLE_IMAGE?=ttl.sh/oadp-operator-bundle-$(GIT_REV):1h
+catalog-test-upgrade: CATALOG_IMAGE?=ttl.sh/oadp-operator-catalog-$(GIT_REV):1h
+catalog-test-upgrade: opm login-required ## Prepare a catalog image with two channels: PREVIOUS_CHANNEL and from current branch
+	mkdir test-upgrade && rsync -a --exclude=test-upgrade ./ test-upgrade/current
+	git clone --depth=1 git@github.com:openshift/oadp-operator.git -b $(PREVIOUS_CHANNEL) test-upgrade/$(PREVIOUS_CHANNEL)
+	cd test-upgrade/$(PREVIOUS_CHANNEL) && \
+		echo -e "FROM golang:$(PREVIOUS_CHANNEL_GO_VERSION)\nRUN useradd --create-home dev\nUSER dev\nWORKDIR /home/dev/$(PREVIOUS_CHANNEL)" | docker image build --tag catalog-test-upgrade - && \
+		docker container run -u $(shell id -u):$(shell id -g) -v $(shell pwd)/test-upgrade/$(PREVIOUS_CHANNEL):/home/dev/$(PREVIOUS_CHANNEL) --rm catalog-test-upgrade make bundle IMG=$(PREVIOUS_OPERATOR_IMAGE) BUNDLE_IMG=$(PREVIOUS_BUNDLE_IMAGE) && \
+		sed -i '/replaces:/d' ./bundle/manifests/oadp-operator.clusterserviceversion.yaml && \
+		IMG=$(PREVIOUS_OPERATOR_IMAGE) BUNDLE_IMG=$(PREVIOUS_BUNDLE_IMAGE) \
+		make docker-build docker-push bundle-build bundle-push && cd -
+	cd test-upgrade/current && IMG=$(THIS_OPERATOR_IMAGE) BUNDLE_IMG=$(THIS_BUNDLE_IMAGE) make bundle && \
+		sed -i '/replaces:/d' ./bundle/manifests/oadp-operator.clusterserviceversion.yaml && \
+		IMG=$(THIS_OPERATOR_IMAGE) BUNDLE_IMG=$(THIS_BUNDLE_IMAGE) \
+		make docker-build docker-push bundle-build bundle-push && cd -
+	$(OPM) index add --container-tool docker --bundles $(PREVIOUS_BUNDLE_IMAGE),$(THIS_BUNDLE_IMAGE) --tag $(CATALOG_IMAGE)
+	docker push $(CATALOG_IMAGE)
+	echo -e "apiVersion: operators.coreos.com/v1alpha1\nkind: CatalogSource\nmetadata:\n  name: oadp-operator-catalog-test-upgrade\n  namespace: openshift-marketplace\nspec:\n  sourceType: grpc\n  image: $(CATALOG_IMAGE)" | $(OC_CLI) create -f -
+	chmod -R 777 test-upgrade && rm -rf test-upgrade && docker image rm catalog-test-upgrade
+
+.PHONY: login-required
+login-required:
+ifeq ($(CLUSTER_TYPE),)
+	$(error You must be logged in to a cluster to run this command)
+else
+	$(info $$CLUSTER_TYPE is [${CLUSTER_TYPE}])
+endif
+
+.PHONY: install-ginkgo
+install-ginkgo: # Make sure ginkgo is in $GOPATH/bin
+	go install -v -mod=mod github.com/onsi/ginkgo/v2/ginkgo
+
+OADP_BUCKET ?= $(shell cat $(OADP_BUCKET_FILE))
+TEST_FILTER = (($(shell echo '! aws && ! gcp && ! azure && ! ibmcloud' | \
+sed -r "s/[&]* [!] $(CLUSTER_TYPE)|[!] $(CLUSTER_TYPE) [&]*//")) || $(CLUSTER_TYPE))
 #TEST_FILTER := $(shell echo '! aws && ! gcp && ! azure' | sed -r "s/[&]* [!] $(CLUSTER_TYPE)|[!] $(CLUSTER_TYPE) [&]*//")
+ifeq ($(TEST_VIRT),true)
+	TEST_FILTER += && (virt)
+else
+	TEST_FILTER += && (! virt)
+endif
+ifeq ($(TEST_UPGRADE),true)
+	TEST_FILTER += && (upgrade)
+else
+	TEST_FILTER += && (! upgrade)
+endif
 SETTINGS_TMP=/tmp/test-settings
 
-test-e2e-setup:
+.PHONY: test-e2e-setup
+test-e2e-setup: login-required
 	mkdir -p $(SETTINGS_TMP)
-	TARGET_CI_CRED_FILE="$(CI_CRED_FILE)" AZURE_RESOURCE_FILE="$(AZURE_RESOURCE_FILE)" CI_JSON_CRED_FILE="$(AZURE_CI_JSON_CRED_FILE)" \
-	OADP_JSON_CRED_FILE="$(AZURE_OADP_JSON_CRED_FILE)" OADP_CRED_FILE="$(OADP_CRED_FILE)" OPENSHIFT_CI="$(OPENSHIFT_CI)" \
-	PROVIDER="$(VELERO_PLUGIN)" BUCKET="$(OADP_BUCKET)" BSL_REGION="$(BSL_REGION)" SECRET="$(CREDS_SECRET_REF)" TMP_DIR=$(SETTINGS_TMP) \
-	VSL_REGION="$(VSL_REGION)" BSL_AWS_PROFILE="$(BSL_AWS_PROFILE)" /bin/bash "tests/e2e/scripts/$(CLUSTER_TYPE)_settings.sh"
+	TMP_DIR=$(SETTINGS_TMP) \
+	OPENSHIFT_CI="$(OPENSHIFT_CI)" \
+	PROVIDER="$(VELERO_PLUGIN)" \
+	AZURE_RESOURCE_FILE="$(AZURE_RESOURCE_FILE)" \
+	CI_JSON_CRED_FILE="$(AZURE_CI_JSON_CRED_FILE)" \
+	OADP_JSON_CRED_FILE="$(AZURE_OADP_JSON_CRED_FILE)" \
+	OADP_CRED_FILE="$(OADP_CRED_FILE)" \
+	BUCKET="$(OADP_BUCKET)" \
+	TARGET_CI_CRED_FILE="$(CI_CRED_FILE)" \
+	VSL_REGION="$(VSL_REGION)" \
+	BSL_REGION="$(BSL_REGION)" \
+	BSL_AWS_PROFILE="$(BSL_AWS_PROFILE)" \
+	/bin/bash "tests/e2e/scripts/$(CLUSTER_TYPE)_settings.sh"
 
-test-e2e: test-e2e-setup ## execute the oadp integration tests
-	ginkgo run -mod=mod tests/e2e/ -- -credentials=$(OADP_CRED_FILE) \
-	-velero_namespace=$(OADP_TEST_NAMESPACE) \
+.PHONY: test-e2e
+test-e2e: test-e2e-setup install-ginkgo
+	ginkgo run -mod=mod tests/e2e/ -- \
 	-settings=$(SETTINGS_TMP)/oadpcreds \
-	-velero_instance_name=$(VELERO_INSTANCE_NAME) \
-	-timeout_multiplier=$(E2E_TIMEOUT_MULTIPLIER) \
-	--ginkgo.label-filter="$(TEST_FILTER)" \
-	-ci_cred_file=$(CI_CRED_FILE) \
 	-provider=$(CLUSTER_TYPE) \
-	-creds_secret_ref=$(CREDS_SECRET_REF) \
+	-credentials=$(OADP_CRED_FILE) \
+	-ci_cred_file=$(CI_CRED_FILE) \
+	-velero_namespace=$(OADP_TEST_NAMESPACE) \
+	-velero_instance_name=$(VELERO_INSTANCE_NAME) \
 	-artifact_dir=$(ARTIFACT_DIR) \
-	-oc_cli=$(OC_CLI)
+	-oc_cli=$(OC_CLI) \
+	-kvm_emulation=$(KVM_EMULATION) \
+	-hco_upstream=$(HCO_UPSTREAM) \
+	--ginkgo.vv \
+	--ginkgo.no-color=$(OPENSHIFT_CI) \
+	--ginkgo.label-filter="$(TEST_FILTER)" \
+	--ginkgo.timeout=2h \
+	$(GINKGO_ARGS)
 
-test-e2e-cleanup:
+.PHONY: test-e2e-cleanup
+test-e2e-cleanup: login-required
+	$(OC_CLI) delete volumesnapshotcontent --all
+	$(OC_CLI) delete volumesnapshotclass oadp-example-snapclass --ignore-not-found=true
+	$(OC_CLI) delete backup -n $(OADP_TEST_NAMESPACE) --all
+	$(OC_CLI) delete backuprepository -n $(OADP_TEST_NAMESPACE) --all
+	$(OC_CLI) delete downloadrequest -n $(OADP_TEST_NAMESPACE) --all
+	$(OC_CLI) delete podvolumerestore -n $(OADP_TEST_NAMESPACE) --all
+	$(OC_CLI) delete dataupload -n $(OADP_TEST_NAMESPACE) --all
+	$(OC_CLI) delete datadownload -n $(OADP_TEST_NAMESPACE) --all
+	$(OC_CLI) delete restore -n $(OADP_TEST_NAMESPACE) --all --wait=false
+	for restore_name in $(shell $(OC_CLI) get restore -n $(OADP_TEST_NAMESPACE) -o name);do $(OC_CLI) patch "$$restore_name" -n $(OADP_TEST_NAMESPACE) -p '{"metadata":{"finalizers":null}}' --type=merge;done
 	rm -rf $(SETTINGS_TMP)
+
+GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
+
+.PHONY: golangci-lint
+golangci-lint: ## Download golangci-lint locally if necessary.
+	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/cmd/golangci-lint@v1.55.2)
+
+.PHONY: lint
+lint: golangci-lint ## Run Go linters checks against all project's Go files.
+	$(GOLANGCI_LINT) run
+
+.PHONY: lint-fix
+lint-fix: golangci-lint ## Fix Go linters issues.
+	$(GOLANGCI_LINT) run --fix
+
+.PHONY: check-go-dependencies
+check-go-dependencies: TEMP:= $(shell mktemp -d)
+check-go-dependencies:
+	@cp -r ./ $(TEMP) && cd $(TEMP) && go mod tidy && cd - && diff -ruN ./ $(TEMP)/ && echo "go dependencies checked" || (echo "go dependencies are out of date, run 'go mod tidy' to update" && exit 1)
+	@chmod -R 777 $(TEMP) && rm -rf $(TEMP)
+	go mod verify
+
+.PHONY: update-non-admin-manifests
+update-non-admin-manifests: NON_ADMIN_CONTROLLER_IMG?=quay.io/konveyor/oadp-non-admin:latest
+update-non-admin-manifests: ## Update Non Admin Controller (NAC) manifests shipped with OADP, from NON_ADMIN_CONTROLLER_PATH
+ifeq ($(NON_ADMIN_CONTROLLER_PATH),)
+	$(error You must set NON_ADMIN_CONTROLLER_PATH to run this command)
+endif
+	@for file_name in $(shell ls $(NON_ADMIN_CONTROLLER_PATH)/config/crd/bases);do \
+		cp $(NON_ADMIN_CONTROLLER_PATH)/config/crd/bases/$$file_name $(shell pwd)/config/crd/bases/$$file_name && \
+		grep -q "\- bases/$$file_name" $(shell pwd)/config/crd/kustomization.yaml || \
+		sed -i "s%resources:%resources:\n- bases/$$file_name%" $(shell pwd)/config/crd/kustomization.yaml;done
+	@sed -i "$(shell grep -Inr 'RELATED_IMAGE_NON_ADMIN_CONTROLLER' $(shell pwd)/config/manager/manager.yaml | awk -F':' '{print $$1+1}')s%.*%            value: $(NON_ADMIN_CONTROLLER_IMG)%" $(shell pwd)/config/manager/manager.yaml
+	@mkdir -p $(shell pwd)/config/non-admin-controller_rbac
+	@for file_name in $(shell grep -I '^\-' $(NON_ADMIN_CONTROLLER_PATH)/config/rbac/kustomization.yaml | awk -F'- ' '{print $$2}');do \
+		cp $(NON_ADMIN_CONTROLLER_PATH)/config/rbac/$$file_name $(shell pwd)/config/non-admin-controller_rbac/$$file_name;done
+	@cp $(NON_ADMIN_CONTROLLER_PATH)/config/rbac/kustomization.yaml $(shell pwd)/config/non-admin-controller_rbac/kustomization.yaml
+	@for file_name in $(shell grep -I '^\-' $(NON_ADMIN_CONTROLLER_PATH)/config/samples/kustomization.yaml | awk -F'- ' '{print $$2}');do \
+		cp $(NON_ADMIN_CONTROLLER_PATH)/config/samples/$$file_name $(shell pwd)/config/samples/$$file_name && \
+		grep -q "\- $$file_name" $(shell pwd)/config/samples/kustomization.yaml || \
+		sed -i "s%resources:%resources:\n- $$file_name%" $(shell pwd)/config/samples/kustomization.yaml;done
+	@make bundle

@@ -18,18 +18,16 @@ package controllers
 
 import (
 	"context"
+	"os"
 
+	"github.com/go-logr/logr"
 	routev1 "github.com/openshift/api/route/v1"
-	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
-
 	security "github.com/openshift/api/security/v1"
+	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
-	"github.com/go-logr/logr"
-	oadpv1alpha1 "github.com/openshift/oadp-operator/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -39,7 +37,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"sigs.k8s.io/controller-runtime/pkg/source"
+
+	oadpv1alpha1 "github.com/openshift/oadp-operator/api/v1alpha1"
+	oadpclient "github.com/openshift/oadp-operator/pkg/client"
 )
 
 // DPAReconciler reconciles a Velero object
@@ -50,7 +50,10 @@ type DPAReconciler struct {
 	Context        context.Context
 	NamespacedName types.NamespacedName
 	EventRecorder  record.EventRecorder
+	dpa            *oadpv1alpha1.DataProtectionApplication
 }
+
+var debugMode = os.Getenv("DEBUG") == "true"
 
 //TODO!!! FIX THIS!!!!
 
@@ -61,10 +64,10 @@ type DPAReconciler struct {
 //+kubebuilder:rbac:groups=oadp.openshift.io,resources=dataprotectionapplications/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=oadp.openshift.io,resources=dataprotectionapplications/finalizers,verbs=update
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
+// Reconcile is part of the main Kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
-// the DataProtectionApplciation object against the actual cluster state, and then
+// the DataProtectionApplication object against the actual cluster state, and then
 // perform operations to make the cluster state reflect the state specified by
 // the user.
 //
@@ -72,42 +75,40 @@ type DPAReconciler struct {
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.9.2/pkg/reconcile
 func (r *DPAReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	r.Log = log.FromContext(ctx)
-	log := r.Log.WithValues("dpa", req.NamespacedName)
+	logger := r.Log.WithValues("dpa", req.NamespacedName)
 	result := ctrl.Result{}
 	// Set reconciler context + name
 	r.Context = ctx
 	r.NamespacedName = req.NamespacedName
-	dpa := oadpv1alpha1.DataProtectionApplication{}
+	r.dpa = &oadpv1alpha1.DataProtectionApplication{}
 
-	if err := r.Get(ctx, req.NamespacedName, &dpa); err != nil {
-		log.Error(err, "unable to fetch DataProtectionApplication CR")
+	if err := r.Get(ctx, req.NamespacedName, r.dpa); err != nil {
+		logger.Error(err, "unable to fetch DataProtectionApplication CR")
 		return result, nil
 	}
 
+	// set client to pkg/client for use in non-reconcile functions
+	oadpclient.SetClient(r.Client)
+
 	_, err := ReconcileBatch(r.Log,
 		r.ValidateDataProtectionCR,
-		r.ReconcileResticRestoreHelperConfig,
-		r.ValidateBackupStorageLocations,
+		r.ReconcileFsRestoreHelperConfig,
 		r.ReconcileBackupStorageLocations,
 		r.ReconcileRegistrySecrets,
 		r.ReconcileRegistries,
 		r.ReconcileRegistrySVCs,
 		r.ReconcileRegistryRoutes,
 		r.ReconcileRegistryRouteConfigs,
-		r.ValidateVolumeSnapshotLocations,
 		r.LabelVSLSecrets,
 		r.ReconcileVolumeSnapshotLocations,
 		r.ReconcileVeleroDeployment,
-		r.ReconcileResticDaemonset,
-		r.ReconcileVeleroServiceMonitor,
+		r.ReconcileNodeAgentDaemonset,
 		r.ReconcileVeleroMetricsSVC,
-		r.ReconcileDataMoverController,
-		r.ReconcileDataMoverResticSecret,
-		r.ReconcileDataMoverVolumeOptions,
+		r.ReconcileNonAdminController,
 	)
 
 	if err != nil {
-		apimeta.SetStatusCondition(&dpa.Status.Conditions,
+		apimeta.SetStatusCondition(&r.dpa.Status.Conditions,
 			metav1.Condition{
 				Type:    oadpv1alpha1.ConditionReconciled,
 				Status:  metav1.ConditionFalse,
@@ -117,7 +118,7 @@ func (r *DPAReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		)
 
 	} else {
-		apimeta.SetStatusCondition(&dpa.Status.Conditions,
+		apimeta.SetStatusCondition(&r.dpa.Status.Conditions,
 			metav1.Condition{
 				Type:    oadpv1alpha1.ConditionReconciled,
 				Status:  metav1.ConditionTrue,
@@ -126,7 +127,7 @@ func (r *DPAReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 			},
 		)
 	}
-	statusErr := r.Client.Status().Update(ctx, &dpa)
+	statusErr := r.Client.Status().Update(ctx, r.dpa)
 	if err == nil { // Don't mask previous error
 		err = statusErr
 	}
@@ -146,7 +147,7 @@ func (r *DPAReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Service{}).
 		Owns(&routev1.Route{}).
 		Owns(&corev1.ConfigMap{}).
-		Watches(&source.Kind{Type: &corev1.Secret{}}, &labelHandler{}).
+		Watches(&corev1.Secret{}, &labelHandler{}).
 		WithEventFilter(veleroPredicate(r.Scheme)).
 		Complete(r)
 }
@@ -154,10 +155,10 @@ func (r *DPAReconciler) SetupWithManager(mgr ctrl.Manager) error {
 type labelHandler struct {
 }
 
-func (l *labelHandler) Create(evt event.CreateEvent, q workqueue.RateLimitingInterface) {
+func (l *labelHandler) Create(ctx context.Context, evt event.CreateEvent, q workqueue.RateLimitingInterface) {
 	// check for the label & add it to the queue
 	namespace := evt.Object.GetNamespace()
-	dpaname := evt.Object.GetLabels()[namespace+".dataprotectionapplication"]
+	dpaname := evt.Object.GetLabels()["dataprotectionapplication.name"]
 	if evt.Object.GetLabels()[oadpv1alpha1.OadpOperatorLabel] == "" || dpaname == "" {
 		return
 	}
@@ -168,10 +169,10 @@ func (l *labelHandler) Create(evt event.CreateEvent, q workqueue.RateLimitingInt
 	}})
 
 }
-func (l *labelHandler) Delete(evt event.DeleteEvent, q workqueue.RateLimitingInterface) {
+func (l *labelHandler) Delete(ctx context.Context, evt event.DeleteEvent, q workqueue.RateLimitingInterface) {
 
 	namespace := evt.Object.GetNamespace()
-	dpaname := evt.Object.GetLabels()[namespace+".dataprotectionapplication"]
+	dpaname := evt.Object.GetLabels()["dataprotectionapplication.name"]
 	if evt.Object.GetLabels()[oadpv1alpha1.OadpOperatorLabel] == "" || dpaname == "" {
 		return
 	}
@@ -181,9 +182,9 @@ func (l *labelHandler) Delete(evt event.DeleteEvent, q workqueue.RateLimitingInt
 	}})
 
 }
-func (l *labelHandler) Update(evt event.UpdateEvent, q workqueue.RateLimitingInterface) {
+func (l *labelHandler) Update(ctx context.Context, evt event.UpdateEvent, q workqueue.RateLimitingInterface) {
 	namespace := evt.ObjectNew.GetNamespace()
-	dpaname := evt.ObjectNew.GetLabels()[namespace+".dataprotectionapplication"]
+	dpaname := evt.ObjectNew.GetLabels()["dataprotectionapplication.name"]
 	if evt.ObjectNew.GetLabels()[oadpv1alpha1.OadpOperatorLabel] == "" || dpaname == "" {
 		return
 	}
@@ -193,10 +194,10 @@ func (l *labelHandler) Update(evt event.UpdateEvent, q workqueue.RateLimitingInt
 	}})
 
 }
-func (l *labelHandler) Generic(evt event.GenericEvent, q workqueue.RateLimitingInterface) {
+func (l *labelHandler) Generic(ctx context.Context, evt event.GenericEvent, q workqueue.RateLimitingInterface) {
 
 	namespace := evt.Object.GetNamespace()
-	dpaname := evt.Object.GetLabels()[namespace+".dataprotectionapplication"]
+	dpaname := evt.Object.GetLabels()["dataprotectionapplication.name"]
 	if evt.Object.GetLabels()[oadpv1alpha1.OadpOperatorLabel] == "" || dpaname == "" {
 		return
 	}
@@ -212,6 +213,7 @@ type ReconcileFunc func(logr.Logger) (bool, error)
 // reconcileBatch steps through a list of reconcile functions until one returns
 // false or an error.
 func ReconcileBatch(l logr.Logger, reconcileFuncs ...ReconcileFunc) (bool, error) {
+	// TODO: #1127 DPAReconciler already have a logger, use it instead of passing to each reconcile functions
 	for _, f := range reconcileFuncs {
 		if cont, err := f(l); !cont || err != nil {
 			return cont, err

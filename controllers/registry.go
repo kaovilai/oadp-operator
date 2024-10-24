@@ -7,23 +7,21 @@ import (
 	"regexp"
 	"strings"
 
-	"k8s.io/apimachinery/pkg/labels"
-
-	"github.com/openshift/oadp-operator/pkg/credentials"
-	"k8s.io/apimachinery/pkg/types"
-
 	"github.com/go-logr/logr"
 	routev1 "github.com/openshift/api/route/v1"
-	oadpv1alpha1 "github.com/openshift/oadp-operator/api/v1alpha1"
-	"github.com/openshift/oadp-operator/pkg/common"
 	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8serror "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+
+	oadpv1alpha1 "github.com/openshift/oadp-operator/api/v1alpha1"
+	"github.com/openshift/oadp-operator/pkg/common"
+	"github.com/openshift/oadp-operator/pkg/credentials"
 )
 
 // Registry Env var keys
@@ -63,6 +61,7 @@ const (
 	Profile               = "profile"
 	S3URL                 = "s3Url"
 	S3ForcePathStyle      = "s3ForcePathStyle"
+	checksumAlgorithm     = "checksumAlgorithm"
 	InsecureSkipTLSVerify = "insecureSkipTLSVerify"
 	StorageAccount        = "storageAccount"
 	ResourceGroup         = "resourceGroup"
@@ -160,11 +159,6 @@ type azureCredentials struct {
 }
 
 func (r *DPAReconciler) ReconcileRegistries(log logr.Logger) (bool, error) {
-	dpa := oadpv1alpha1.DataProtectionApplication{}
-	if err := r.Get(r.Context, r.NamespacedName, &dpa); err != nil {
-		return false, err
-	}
-
 	bslLabels := map[string]string{
 		"app.kubernetes.io/name":             common.OADPOperatorVelero,
 		"app.kubernetes.io/managed-by":       common.OADPOperator,
@@ -243,33 +237,35 @@ func replaceCarriageReturn(data map[string][]byte, logger logr.Logger) map[strin
 	return data
 }
 
-func (r *DPAReconciler) getSecretNameAndKeyforBackupLocation(bslspec oadpv1alpha1.BackupLocation) (string, string) {
-
-	if bslspec.CloudStorage != nil {
-		if bslspec.CloudStorage.Credential != nil {
-			return bslspec.CloudStorage.Credential.Name, bslspec.CloudStorage.Credential.Key
+func (r *DPAReconciler) getSecretNameAndKeyFromCloudStorage(cloudStorage *oadpv1alpha1.CloudStorageLocation) (string, string, error) {
+	if cloudStorage.Credential != nil {
+		// Check if user specified empty credential key
+		if cloudStorage.Credential.Key == "" {
+			return "", "", fmt.Errorf("Secret key specified in CloudStorage cannot be empty")
 		}
+		// Check if user specified empty credential name
+		if cloudStorage.Credential.Name == "" {
+			return "", "", fmt.Errorf("Secret name specified in CloudStorage cannot be empty")
+		}
+		secretName, secretKey := cloudStorage.Credential.Name, cloudStorage.Credential.Key
+		err := r.verifySecretContent(secretName, secretKey)
+		return secretName, secretKey, err
 	}
-	if bslspec.Velero != nil {
-		return r.getSecretNameAndKey(bslspec.Velero, oadpv1alpha1.DefaultPlugin(bslspec.Velero.Provider))
-	}
-
-	return "", ""
+	return "", "", nil
 }
 
-func (r *DPAReconciler) getSecretNameAndKey(bslSpec *velerov1.BackupStorageLocationSpec, plugin oadpv1alpha1.DefaultPlugin) (string, string) {
+func (r *DPAReconciler) getSecretNameAndKey(config map[string]string, credential *corev1.SecretKeySelector, plugin oadpv1alpha1.DefaultPlugin) (string, string, error) {
 	// Assume default values unless user has overriden them
 	secretName := credentials.PluginSpecificFields[plugin].SecretName
 	secretKey := credentials.PluginSpecificFields[plugin].PluginSecretKey
-	if _, ok := bslSpec.Config["credentialsFile"]; ok {
+	if _, ok := config["credentialsFile"]; ok {
 		if secretName, secretKey, err :=
-			credentials.GetSecretNameKeyFromCredentialsFileConfigString(bslSpec.Config["credentialsFile"]); err == nil {
+			credentials.GetSecretNameKeyFromCredentialsFileConfigString(config["credentialsFile"]); err == nil {
 			r.Log.Info(fmt.Sprintf("credentialsFile secret: %s, key: %s", secretName, secretKey))
-			return secretName, secretKey
+			return secretName, secretKey, nil
 		}
 	}
 	// check if user specified the Credential Name and Key
-	credential := bslSpec.Credential
 	if credential != nil {
 		if len(credential.Name) > 0 {
 			secretName = credential.Name
@@ -279,7 +275,12 @@ func (r *DPAReconciler) getSecretNameAndKey(bslSpec *velerov1.BackupStorageLocat
 		}
 	}
 
-	return secretName, secretKey
+	err := r.verifySecretContent(secretName, secretKey)
+	if err != nil {
+		return secretName, secretKey, err
+	}
+
+	return secretName, secretKey, nil
 }
 
 func (r *DPAReconciler) parseAWSSecret(secret corev1.Secret, secretKey string, matchProfile string) (string, string, error) {
@@ -466,18 +467,13 @@ func (r *DPAReconciler) getMatchedKeyValue(key string, s string) (string, error)
 		s = strings.TrimPrefix(s, prefix)
 	}
 	if len(s) == 0 {
-		r.Log.Info("Could not parse secret for %s", key)
-		return s, errors.New(key + " secret parsing error")
+		r.Log.Info(fmt.Sprintf("Could not parse secret for %s", key))
+		return s, errors.New("secret parsing error in key " + key)
 	}
 	return s, nil
 }
 
 func (r *DPAReconciler) ReconcileRegistrySVCs(log logr.Logger) (bool, error) {
-	dpa := oadpv1alpha1.DataProtectionApplication{}
-	if err := r.Get(r.Context, r.NamespacedName, &dpa); err != nil {
-		return false, err
-	}
-
 	// fetch the bsl instances
 	bslList := velerov1.BackupStorageLocationList{}
 	if err := r.List(r.Context, &bslList, &client.ListOptions{
@@ -521,11 +517,6 @@ func (r *DPAReconciler) ReconcileRegistrySVCs(log logr.Logger) (bool, error) {
 }
 
 func (r *DPAReconciler) ReconcileRegistryRoutes(log logr.Logger) (bool, error) {
-	dpa := oadpv1alpha1.DataProtectionApplication{}
-	if err := r.Get(r.Context, r.NamespacedName, &dpa); err != nil {
-		return false, err
-	}
-
 	// fetch the bsl instances
 	bslList := velerov1.BackupStorageLocationList{}
 	if err := r.List(r.Context, &bslList, &client.ListOptions{
@@ -577,7 +568,6 @@ func (r *DPAReconciler) ReconcileRegistryRoutes(log logr.Logger) (bool, error) {
 }
 
 func (r *DPAReconciler) ReconcileRegistryRouteConfigs(log logr.Logger) (bool, error) {
-
 	// Now for each of these bsl instances, create a registry route cm for each of them
 	registryRouteCM := corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
@@ -609,11 +599,7 @@ func (r *DPAReconciler) ReconcileRegistryRouteConfigs(log logr.Logger) (bool, er
 
 // Create secret for registry to be parsed by openshift-velero-plugin
 func (r *DPAReconciler) ReconcileRegistrySecrets(log logr.Logger) (bool, error) {
-	dpa := oadpv1alpha1.DataProtectionApplication{}
-	if err := r.Get(r.Context, r.NamespacedName, &dpa); err != nil {
-		return false, err
-	}
-
+	dpa := r.dpa
 	// fetch the bsl instances
 	bslList := velerov1.BackupStorageLocationList{}
 	if err := r.List(r.Context, &bslList, &client.ListOptions{
@@ -666,7 +652,7 @@ func (r *DPAReconciler) ReconcileRegistrySecrets(log logr.Logger) (bool, error) 
 		// Create Secret
 		op, err := controllerutil.CreateOrPatch(r.Context, r.Client, &secret, func() error {
 			// TODO: check for secret status condition errors and respond here
-			err := r.patchRegistrySecret(&secret, &bsl, &dpa)
+			err := r.patchRegistrySecret(&secret, &bsl)
 
 			return err
 		})
@@ -686,9 +672,9 @@ func (r *DPAReconciler) ReconcileRegistrySecrets(log logr.Logger) (bool, error) 
 	return true, nil
 }
 
-func (r *DPAReconciler) patchRegistrySecret(secret *corev1.Secret, bsl *velerov1.BackupStorageLocation, dpa *oadpv1alpha1.DataProtectionApplication) error {
+func (r *DPAReconciler) patchRegistrySecret(secret *corev1.Secret, bsl *velerov1.BackupStorageLocation) error {
 	// Setting controller owner reference on the registry secret
-	err := controllerutil.SetControllerReference(dpa, secret, r.Scheme)
+	err := controllerutil.SetControllerReference(r.dpa, secret, r.Scheme)
 	if err != nil {
 		return err
 	}
@@ -712,7 +698,7 @@ func (r *DPAReconciler) patchRegistrySecret(secret *corev1.Secret, bsl *velerov1
 
 func (r *DPAReconciler) populateAWSRegistrySecret(bsl *velerov1.BackupStorageLocation, registrySecret *corev1.Secret) error {
 	// Check for secret name
-	secretName, secretKey := r.getSecretNameAndKey(&bsl.Spec, oadpv1alpha1.DefaultPluginAWS)
+	secretName, secretKey, _ := r.getSecretNameAndKey(bsl.Spec.Config, bsl.Spec.Credential, oadpv1alpha1.DefaultPluginAWS)
 
 	// fetch secret and error
 	secret, err := r.getProviderSecret(secretName)
@@ -741,7 +727,7 @@ func (r *DPAReconciler) populateAWSRegistrySecret(bsl *velerov1.BackupStorageLoc
 
 func (r *DPAReconciler) populateAzureRegistrySecret(bsl *velerov1.BackupStorageLocation, registrySecret *corev1.Secret) error {
 	// Check for secret name
-	secretName, secretKey := r.getSecretNameAndKey(&bsl.Spec, oadpv1alpha1.DefaultPluginMicrosoftAzure)
+	secretName, secretKey, _ := r.getSecretNameAndKey(bsl.Spec.Config, bsl.Spec.Credential, oadpv1alpha1.DefaultPluginMicrosoftAzure)
 
 	// fetch secret and error
 	secret, err := r.getProviderSecret(secretName)
@@ -781,5 +767,17 @@ func (r *DPAReconciler) populateAzureRegistrySecret(bsl *velerov1.BackupStorageL
 		"resource_group_key":  []byte(azcreds.resourceGroup),
 	}
 
+	return nil
+}
+
+func (r *DPAReconciler) verifySecretContent(secretName string, secretKey string) error {
+	secret, err := r.getProviderSecret(secretName)
+	if err != nil {
+		return err
+	}
+	data, foundKey := secret.Data[secretKey]
+	if !foundKey || len(data) == 0 {
+		return fmt.Errorf("Secret name %s is missing data for key %s", secretName, secretKey)
+	}
 	return nil
 }

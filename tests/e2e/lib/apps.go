@@ -5,23 +5,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"log"
-	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"reflect"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
 	volumesnapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
 	"github.com/onsi/ginkgo/v2"
+	"github.com/onsi/gomega"
 	ocpappsv1 "github.com/openshift/api/apps/v1"
-	buildv1 "github.com/openshift/api/build/v1"
-	routev1 "github.com/openshift/api/route/v1"
 	security "github.com/openshift/api/security/v1"
 	templatev1 "github.com/openshift/api/template/v1"
 	"github.com/vmware-tanzu/velero/pkg/label"
@@ -30,24 +25,26 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/serializer/yaml"
-	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/config"
 )
 
-const e2eAppLabelKey = "e2e-app"
-const e2eAppLabelValue = "true"
-
-var (
-	e2eAppLabelRequirement, _ = labels.NewRequirement(e2eAppLabelKey, selection.Equals, []string{e2eAppLabelValue})
-	e2eAppLabelSelector       = labels.NewSelector().Add(*e2eAppLabelRequirement)
+const (
+	e2eAppLabelKey   = "e2e-app"
+	e2eAppLabelValue = "true"
 )
+
+var e2eAppLabel = fmt.Sprintf("%s=%s", e2eAppLabelKey, e2eAppLabelValue)
 
 func InstallApplication(ocClient client.Client, file string) error {
+	return InstallApplicationWithRetries(ocClient, file, 3)
+}
+
+func InstallApplicationWithRetries(ocClient client.Client, file string, retries int) error {
 	template, err := os.ReadFile(file)
 	if err != nil {
 		return err
@@ -60,67 +57,87 @@ func InstallApplication(ocClient client.Client, file string) error {
 		return err
 	}
 	for _, resource := range obj.Items {
-		labels := resource.GetLabels()
-		if labels == nil {
-			labels = make(map[string]string)
+		resourceLabels := resource.GetLabels()
+		if resourceLabels == nil {
+			resourceLabels = make(map[string]string)
 		}
-		labels[e2eAppLabelKey] = "true"
-		resource.SetLabels(labels)
-		err = ocClient.Create(context.Background(), &resource)
-		if apierrors.IsAlreadyExists(err) {
-			// if spec has changed for following kinds, update the resource
-			clusterResource := unstructured.Unstructured{
-				Object: resource.Object,
-			}
-			err = ocClient.Get(context.Background(), types.NamespacedName{Name: resource.GetName(), Namespace: resource.GetNamespace()}, &clusterResource)
-			if err != nil {
-				return err
-			}
-			if _, metadataExists := clusterResource.Object["metadata"]; metadataExists {
-				// copy generation, resourceVersion, and annotations from the existing resource
-				resource.SetGeneration(clusterResource.GetGeneration())
-				resource.SetResourceVersion(clusterResource.GetResourceVersion())
-				resource.SetUID(clusterResource.GetUID())
-				resource.SetManagedFields(clusterResource.GetManagedFields())
-				resource.SetCreationTimestamp(clusterResource.GetCreationTimestamp())
-				resource.SetDeletionTimestamp(clusterResource.GetDeletionTimestamp())
-			}
-			needsUpdate := false
-			for key := range clusterResource.Object {
-				if key == "status" {
-					continue
+		resourceLabels[e2eAppLabelKey] = e2eAppLabelValue
+		resource.SetLabels(resourceLabels)
+		resourceCreate := resource.DeepCopy()
+		err = nil // reset error for each resource
+		for i := 0; i < retries; i++ {
+			err = nil // reset error for each retry
+			err = ocClient.Create(context.Background(), resourceCreate)
+			if apierrors.IsAlreadyExists(err) {
+				// if spec has changed for following kinds, update the resource
+				clusterResource := unstructured.Unstructured{
+					Object: resource.Object,
 				}
-				if !reflect.DeepEqual(clusterResource.Object[key], resource.Object[key]) {
-					fmt.Println("diff found for key:", key)
-					ginkgo.GinkgoWriter.Println(cmp.Diff(clusterResource.Object[key], resource.Object[key]))
-					needsUpdate = true
-					clusterResource.Object[key] = resource.Object[key]
-				}
-			}
-			if needsUpdate {
-				fmt.Printf("updating resource: %s; name: %s\n", resource.GetKind(), resource.GetName())
-				err = ocClient.Update(context.Background(), &clusterResource)
+				err = ocClient.Get(context.Background(), types.NamespacedName{Name: resource.GetName(), Namespace: resource.GetNamespace()}, &clusterResource)
 				if err != nil {
 					return err
 				}
+				if _, metadataExists := clusterResource.Object["metadata"]; metadataExists {
+					// copy generation, resourceVersion, and annotations from the existing resource
+					resource.SetGeneration(clusterResource.GetGeneration())
+					resource.SetResourceVersion(clusterResource.GetResourceVersion())
+					resource.SetUID(clusterResource.GetUID())
+					resource.SetManagedFields(clusterResource.GetManagedFields())
+					resource.SetCreationTimestamp(clusterResource.GetCreationTimestamp())
+					resource.SetDeletionTimestamp(clusterResource.GetDeletionTimestamp())
+					resource.SetFinalizers(clusterResource.GetFinalizers())
+					// append cluster labels to existing labels if they don't already exist
+					resourceLabels := resource.GetLabels()
+					if resourceLabels == nil {
+						resourceLabels = make(map[string]string)
+					}
+					for k, v := range clusterResource.GetLabels() {
+						if _, exists := resourceLabels[k]; !exists {
+							resourceLabels[k] = v
+						}
+					}
+				}
+				needsUpdate := false
+				for key := range clusterResource.Object {
+					if key == "status" {
+						// check we aren't hitting pending deletion finalizers
+						ginkgo.GinkgoWriter.Printf("%s has status %v", clusterResource.GroupVersionKind(), clusterResource.Object[key])
+						continue
+					}
+					if !reflect.DeepEqual(clusterResource.Object[key], resource.Object[key]) {
+						log.Println("diff found for key:", key)
+						ginkgo.GinkgoWriter.Println(cmp.Diff(clusterResource.Object[key], resource.Object[key]))
+						needsUpdate = true
+						clusterResource.Object[key] = resource.Object[key]
+					}
+				}
+				if needsUpdate {
+					log.Printf("updating resource: %s; name: %s\n", resource.GroupVersionKind(), resource.GetName())
+					err = ocClient.Update(context.Background(), &clusterResource)
+				}
 			}
-		} else if err != nil {
+			// if no error, stop retrying
+			if err == nil {
+				break
+			}
+			// if error, retry
+			log.Printf("error creating or updating resource: %s; name: %s; error: %s; retrying for %d more times\n", resource.GroupVersionKind(), resource.GetName(), err, retries-i)
+		}
+		// if still error on this resource, return error
+		if err != nil {
 			return err
 		}
+		// next resource
 	}
 	return nil
 }
 
-func DoesSCCExist(ocClient client.Client, sccName string) (bool, error) {
-	scc := security.SecurityContextConstraints{}
-	err := ocClient.Get(context.Background(), client.ObjectKey{
-		Name: sccName,
-	}, &scc)
-	if err != nil {
-		return false, err
-	}
-	return true, nil
-
+func DoesSCCExist(ocClient client.Client, sccName string) error {
+	return ocClient.Get(
+		context.Background(),
+		client.ObjectKey{Name: sccName},
+		&security.SecurityContextConstraints{},
+	)
 }
 
 func UninstallApplication(ocClient client.Client, file string) error {
@@ -201,7 +218,6 @@ func NamespaceRequiresResticDCWorkaround(ocClient client.Client, namespace strin
 func AreVolumeSnapshotsReady(ocClient client.Client, backupName string) wait.ConditionFunc {
 	return func() (bool, error) {
 		vList := &volumesnapshotv1.VolumeSnapshotContentList{}
-		// vListBeta := &volumesnapshotv1beta1.VolumeSnapshotList{}
 		err := ocClient.List(context.Background(), vList, &client.ListOptions{LabelSelector: label.NewSelectorForBackup(backupName)})
 		if err != nil {
 			return false, err
@@ -238,8 +254,10 @@ func IsDCReady(ocClient client.Client, namespace, dcName string) wait.ConditionF
 		}
 		// check dc for false availability condition which occurs when a new replication controller is created (after a new build completed) even if there are satisfactory available replicas
 		for _, condition := range dc.Status.Conditions {
+			log.Printf("DeploymentConfig %s Status.Conditions:\n%#v", dc.Name, condition)
 			if condition.Type == ocpappsv1.DeploymentAvailable {
 				if condition.Status == corev1.ConditionFalse {
+					log.Printf("DeploymentConfig %s has condition.Status False", dc.Name)
 					return false, nil
 				}
 				break
@@ -252,13 +270,6 @@ func IsDCReady(ocClient client.Client, namespace, dcName string) wait.ConditionF
 				}
 			}
 			return false, errors.New("DC is not in a ready state")
-		}
-		for _, trigger := range dc.Spec.Triggers {
-			if trigger.Type == ocpappsv1.DeploymentTriggerOnImageChange {
-				if trigger.ImageChangeParams.Automatic {
-					return areAppBuildsReady(ocClient, namespace)
-				}
-			}
 		}
 		return true, nil
 	}
@@ -286,93 +297,40 @@ func IsDeploymentReady(ocClient client.Client, namespace, dName string) wait.Con
 	}
 }
 
-func AreAppBuildsReady(ocClient client.Client, namespace string) wait.ConditionFunc {
+func AreApplicationPodsRunning(c *kubernetes.Clientset, namespace string) wait.ConditionFunc {
 	return func() (bool, error) {
-		return areAppBuildsReady(ocClient, namespace)
-	}
-}
-
-func areAppBuildsReady(ocClient client.Client, namespace string) (bool, error) {
-	buildList := &buildv1.BuildList{}
-	err := ocClient.List(context.Background(), buildList, &client.ListOptions{Namespace: namespace, LabelSelector: e2eAppLabelSelector})
-	if err != nil && !apierrors.IsNotFound(err) {
-		return false, err
-	}
-	if buildList.Items != nil {
-		for _, build := range buildList.Items {
-			if build.Status.Phase == buildv1.BuildPhaseNew ||
-				build.Status.Phase == buildv1.BuildPhasePending ||
-				build.Status.Phase == buildv1.BuildPhaseRunning {
-				log.Println("Build is not ready: " + build.Name)
-				return false, nil
-			}
-			if build.Status.Phase == buildv1.BuildPhaseFailed || build.Status.Phase == buildv1.BuildPhaseError {
-				ginkgo.GinkgoWriter.Println("Build failed/error: " + build.Name)
-				ginkgo.GinkgoWriter.Println(fmt.Sprintf("status: %v", build.Status))
-				return false, errors.New("found build failed or error")
-			}
-			if build.Status.Phase == buildv1.BuildPhaseComplete {
-				log.Println("Build is complete: " + build.Name + " patching build pod label to exclude from backup")
-				podName := build.GetAnnotations()["openshift.io/build.pod-name"]
-				pod := corev1.Pod{}
-				err := ocClient.Get(context.Background(), client.ObjectKey{
-					Namespace: namespace,
-					Name:      podName,
-				}, &pod)
-				if err != nil {
-					return false, err
-				}
-				pod.Labels["velero.io/exclude-from-backup"] = "true"
-				err = ocClient.Update(context.Background(), &pod)
-				if err != nil {
-					log.Println("Error patching build pod label to exclude from backup: " + err.Error())
-					return false, err
-				}
-			}
-		}
-	}
-	return true, nil
-}
-
-func AreApplicationPodsRunning(namespace string) wait.ConditionFunc {
-	return func() (bool, error) {
-		clientset, err := setUpClient()
+		podList, err := GetAllPodsWithLabel(c, namespace, e2eAppLabel)
 		if err != nil {
 			return false, err
 		}
-		// select Velero pod with this label
-		veleroOptions := metav1.ListOptions{
-			LabelSelector: e2eAppLabelSelector.String(),
-		}
-		// get pods in test namespace with labelSelector
-		podList, err := clientset.CoreV1().Pods(namespace).List(context.TODO(), veleroOptions)
-		if err != nil {
-			return false, nil
-		}
-		if len(podList.Items) == 0 {
-			return false, nil
-		}
-		// get pod name and status with specified label selector
-		for _, podInfo := range podList.Items {
-			phase := podInfo.Status.Phase
+
+		for _, pod := range podList.Items {
+			if pod.DeletionTimestamp != nil {
+				log.Printf("Pod %v is terminating", pod.Name)
+				return false, fmt.Errorf("Pod is terminating")
+			}
+
+			phase := pod.Status.Phase
 			if phase != corev1.PodRunning && phase != corev1.PodSucceeded {
-				ginkgo.GinkgoWriter.Write([]byte(fmt.Sprintf("Pod %v not yet succeeded", podInfo.Name)))
-				ginkgo.GinkgoWriter.Write([]byte(fmt.Sprintf("status: %v", podInfo.Status)))
-				return false, nil
+				log.Printf("Pod %v not yet succeeded: phase is %v", pod.Name, phase)
+				return false, fmt.Errorf("Pod not yet succeeded")
+			}
+
+			for _, condition := range pod.Status.Conditions {
+				log.Printf("Pod %v condition:\n%#v", pod.Name, condition)
+				if condition.Type == corev1.ContainersReady && condition.Status != corev1.ConditionTrue {
+					log.Printf("Pod %v not yet succeeded: condition is: %v", pod.Name, condition.Status)
+					return false, fmt.Errorf("Pod not yet succeeded")
+				}
 			}
 		}
-		return true, err
+		return true, nil
 	}
 }
 
-func PrintNamespaceEventsAfterTime(namespace string, startTime time.Time) {
+func PrintNamespaceEventsAfterTime(c *kubernetes.Clientset, namespace string, startTime time.Time) {
 	log.Println("Printing events for namespace: ", namespace)
-	clientset, err := setUpClient()
-	if err != nil {
-		ginkgo.GinkgoWriter.Write([]byte(fmt.Sprintf("Error getting client: %v\n", err)))
-		return
-	}
-	events, err := clientset.CoreV1().Events(namespace).List(context.TODO(), metav1.ListOptions{})
+	events, err := c.CoreV1().Events(namespace).List(context.Background(), metav1.ListOptions{})
 	if err != nil {
 		ginkgo.GinkgoWriter.Write([]byte(fmt.Sprintf("Error getting events: %v\n", err)))
 		return
@@ -396,203 +354,169 @@ func RunMustGather(oc_cli string, artifact_dir string) error {
 	mustGatherCmd := "must-gather"
 	mustGatherImg := "--image=quay.io/konveyor/oadp-must-gather:latest"
 	destDir := "--dest-dir=" + artifact_dir
-	logCmdPmt := "--"
-	logCmd := "gather_logs_without_zip"
 
-	cmd := exec.Command(ocClient, ocAdmin, mustGatherCmd, mustGatherImg, destDir, logCmdPmt, logCmd)
+	cmd := exec.Command(ocClient, ocAdmin, mustGatherCmd, mustGatherImg, destDir)
 	_, err := cmd.Output()
 	return err
 }
 
-func makeRequest(request string, api string, todo string) {
-	params := url.Values{}
-	params.Add("description", todo)
-	body := strings.NewReader(params.Encode())
-	req, err := http.NewRequest(request, api, body)
-	if err != nil {
-		log.Printf("Error making post request to todo app before Prebackup  %s", err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		log.Printf("Response of todo POST REQUEST  %s", resp.Status)
-	}
-	defer resp.Body.Close()
-}
-
 // VerifyBackupRestoreData verifies if app ready before backup and after restore to compare data.
-func VerifyBackupRestoreData(artifact_dir string, namespace string, routeName string, app string, prebackupState bool, twoVol bool, backupRestoretype BackupRestoreType) error {
+func VerifyBackupRestoreData(ocClient client.Client, kubeClient *kubernetes.Clientset, kubeConfig *rest.Config, artifactDir string, namespace string, routeName string, serviceName string, app string, prebackupState bool, twoVol bool) error {
 	log.Printf("Verifying backup/restore data of %s", app)
-	appRoute := &routev1.Route{}
-	clientv1, err := client.New(config.GetConfigOrDie(), client.Options{})
+	appEndpointURL, proxyPodParams, err := getAppEndpointURLAndProxyParams(ocClient, kubeClient, kubeConfig, namespace, serviceName, routeName)
 	if err != nil {
 		return err
 	}
-	backupFile := artifact_dir + "/backup-data.txt"
-	routev1.AddToScheme(clientv1.Scheme())
-	err = clientv1.Get(context.Background(), client.ObjectKey{
-		Namespace: namespace,
-		Name:      routeName,
-	}, appRoute)
-	if err != nil {
-		return err
-	}
-	appApi := "http://" + appRoute.Spec.Host
 
-	//if this is prebackstate = true, add items via makeRequest function. We only want to make request before backup
-	//and ignore post restore checks.
+	// Construct request parameters for the "todo-incomplete" endpoint
+	requestParamsTodoIncomplete := getRequestParameters(appEndpointURL+"/todo-incomplete", proxyPodParams, GET, nil)
+
 	if prebackupState {
-		// delete backupFile if it exists
-		if _, err := os.Stat(backupFile); err == nil {
-			os.Remove(backupFile)
+		// Clean up existing backup file
+		RemoveFileIfExists(artifactDir + "/backup-data.txt")
+
+		// Make requests and update data before backup
+		dataBeforeCurl, errResp, err := MakeRequest(*requestParamsTodoIncomplete)
+		if err != nil {
+			if errResp != "" {
+				log.Printf("Request response error msg: %s\n", errResp)
+			}
+			return err
 		}
-		//data before curl request
-		dataBeforeCurl, err := getResponseData(appApi + "/todo-incomplete")
+		log.Printf("Data before the curl request: \n %s\n", dataBeforeCurl)
+
+		// Make two post requests to the "todo" endpoint
+		postPayload := `{"description": "` + time.Now().String() + `"}`
+		requestParams := getRequestParameters(appEndpointURL+"/todo", proxyPodParams, POST, &postPayload)
+		MakeRequest(*requestParams)
+
+		postPayload = `{"description": "` + time.Now().Weekday().String() + `"}`
+		requestParams = getRequestParameters(appEndpointURL+"/todo", proxyPodParams, POST, &postPayload)
+		MakeRequest(*requestParams)
+	}
+
+	// Make request to the "todo-incomplete" endpoint
+	respData, errResp, err := MakeRequest(*requestParamsTodoIncomplete)
+	if err != nil {
+		if errResp != "" {
+			log.Printf("Request response error msg: %s\n", errResp)
+		}
+		return err
+	}
+
+	if prebackupState {
+		// Write data to backup file
+		log.Printf("Writing data to backupFile (backup-data.txt): \n %s\n", respData)
+		if err := os.WriteFile(artifactDir+"/backup-data.txt", []byte(respData), 0644); err != nil {
+			return err
+		}
+	} else {
+		// Compare data with backup file after restore
+		backupData, err := os.ReadFile(artifactDir + "/backup-data.txt")
 		if err != nil {
 			return err
-		} else {
-			fmt.Printf("Data before the curl request: \n %s\n", dataBeforeCurl)
 		}
-		//make post request to given api
-		switch app {
-		case "todolist":
-			fmt.Printf("PrebackState: %t, so make a curl request\n", prebackupState)
-			makeRequest("POST", appApi+"/todo", time.Now().String())
-			makeRequest("POST", appApi+"/todo", time.Now().Weekday().String())
-		}
-	}
-	volumeApi := appApi + "/log"
-
-	switch app {
-	case "todolist":
-		appApi += "/todo-incomplete"
-	}
-
-	//get response Data if response status is 200
-	respData, err := getResponseData(appApi)
-	if err != nil {
-		return err
-	}
-
-	//Verifying backup-restore data only for CSI as of now.
-	if backupRestoretype == CSI || backupRestoretype == RESTIC {
-		//check if backupfile exists. If true { compare data response with data from file} (post restore step)
-		//else write data to backup-data.txt (prebackup step)
-		if _, err := os.Stat(backupFile); err == nil {
-			backupData, err := os.ReadFile(backupFile)
-			if err != nil {
-				return err
-			}
-			os.Remove(backupFile)
-			fmt.Printf("Data came from backup-file\n %s\n", backupData)
-			fmt.Printf("Data from the response after restore\n %s\n", respData)
-			backDataIsEqual := false
-			for i := 0; i < 5 && !backDataIsEqual; i++ {
-				respData, err = getResponseData(appApi)
-				if err != nil {
-					return err
-				}
-				backDataIsEqual = bytes.Equal(backupData, respData)
-				if backDataIsEqual != true {
-					fmt.Printf("Backup and Restore Data are not equal, retry %d\n", i)
-					fmt.Printf("Data from the response after restore\n %s\n", respData)
-					time.Sleep(10 * time.Second)
-				}
-			}
-			if backDataIsEqual != true {
-				return errors.New("Backup and Restore Data are not the same")
-			}
-
-		} else if errors.Is(err, os.ErrNotExist) {
-			fmt.Printf("Writing data to backupFile (backup-data.txt): \n %s\n", respData)
-			err := os.WriteFile(backupFile, respData, 0644)
-			if err != nil {
-				return err
-			}
+		log.Printf("Data came from backup-file\n %s\n", backupData)
+		log.Printf("Data came from response\n %s\n", respData)
+		trimmedBackup := bytes.TrimSpace(backupData)
+		trimmedResp := bytes.TrimSpace([]byte(respData))
+		if !bytes.Equal(trimmedBackup, trimmedResp) {
+			return errors.New("Backup and Restore Data are not the same")
 		}
 	}
 
 	if twoVol {
-		volumeFile := artifact_dir + "/volume-data.txt"
-		return verifyVolume(volumeFile, volumeApi, prebackupState, backupRestoretype)
+		// Verify volume data if needed
+		requestParamsVolume := getRequestParameters(appEndpointURL+"/log", proxyPodParams, GET, nil)
+		volumeFile := artifactDir + "/volume-data.txt"
+		return verifyVolume(requestParamsVolume, volumeFile, prebackupState)
 	}
 
 	return nil
 }
 
-//VerifyVolumeData for application with two volumes
-func verifyVolume(volumeFile string, volumeApi string, prebackupState bool, backupRestoretype BackupRestoreType) error {
+func getRequestParameters(url string, proxyPodParams *ProxyPodParameters, method HTTPMethod, payload *string) *RequestParameters {
+	return &RequestParameters{
+		ProxyPodParams: proxyPodParams,
+		RequestMethod:  &method,
+		URL:            url,
+		Payload:        payload,
+	}
+}
+
+func getAppEndpointURLAndProxyParams(ocClient client.Client, kubeClient *kubernetes.Clientset, kubeConfig *rest.Config, namespace, serviceName, routeName string) (string, *ProxyPodParameters, error) {
+	appEndpointURL, err := GetRouteEndpointURL(ocClient, namespace, routeName)
+	// Something wrong with standard endpoint, try with proxy pod.
+	if err != nil {
+		log.Println("Can not connect to the application endpoint with route:", err)
+		log.Println("Trying to get to the service via proxy POD")
+
+		pod, podErr := GetFirstPodByLabel(kubeClient, namespace, "curl-tool=true")
+		if podErr != nil {
+			return "", nil, fmt.Errorf("Error getting pod for the proxy command: %v", podErr)
+		}
+
+		proxyPodParams := &ProxyPodParameters{
+			KubeClient:    kubeClient,
+			KubeConfig:    kubeConfig,
+			Namespace:     namespace,
+			PodName:       pod.ObjectMeta.Name,
+			ContainerName: "curl-tool",
+		}
+
+		appEndpointURL = GetInternalServiceEndpointURL(namespace, serviceName)
+
+		return appEndpointURL, proxyPodParams, nil
+	}
+
+	return appEndpointURL, nil, nil
+}
+
+// VerifyVolumeData for application with two volumes
+func verifyVolume(requestParams *RequestParameters, volumeFile string, prebackupState bool) error {
+	var volData string
+	var err error
+
+	// Function to get response
+	getResponseFromVolumeCall := func() bool {
+		// Attempt to make the request
+		var errResp string
+		volData, errResp, err = MakeRequest(*requestParams)
+		if err != nil {
+			if errResp != "" {
+				log.Printf("Request response error msg: %s\n", errResp)
+			}
+			log.Printf("Request errored out: %v\n", err)
+			return false
+		}
+		return true
+	}
+
+	if success := gomega.Eventually(getResponseFromVolumeCall, time.Minute*4, time.Second*15).Should(gomega.BeTrue()); !success {
+		return fmt.Errorf("Failed to get response for volume: %v", err)
+	}
+
 	if prebackupState {
 		// delete volumeFile if it exists
-		if _, err := os.Stat(volumeFile); err == nil {
-			os.Remove(volumeFile)
+		RemoveFileIfExists(volumeFile)
+
+		log.Printf("Writing data to volumeFile (volume-data.txt): \n %s", volData)
+		err := os.WriteFile(volumeFile, []byte(volData), 0644)
+		if err != nil {
+			return err
+		}
+
+	} else {
+		volumeBackupData, err := os.ReadFile(volumeFile)
+		if err != nil {
+			return err
+		}
+		log.Printf("Data came from volume-file\n %s", volumeBackupData)
+		log.Printf("Volume Data after restore\n %s", volData)
+		dataIsIn := bytes.Contains([]byte(volData), volumeBackupData)
+		if dataIsIn != true {
+			return errors.New("Backup data is not in Restore Data")
 		}
 	}
-	//get response Data if response status is 200
-	volData, err := getResponseData(volumeApi)
-	if err != nil {
-		return err
-	}
-	if backupRestoretype == CSI || backupRestoretype == RESTIC {
-		if _, err := os.Stat(volumeFile); err == nil {
-			volumeBackupData, err := os.ReadFile(volumeFile)
-			if err != nil {
-				return err
-			}
-			os.Remove(volumeFile)
-			fmt.Printf("Data came from volume-file\n %s\n", volumeBackupData)
-			fmt.Printf("Volume Data after restore\n %s\n", volData)
-			dataIsEqual := false
-			for i := 0; i < 5 && !dataIsEqual; i++ {
-				volData, err = getResponseData(volumeApi)
-				if err != nil {
-					return err
-				}
-				dataIsEqual = bytes.Contains(volData, volumeBackupData)
-				if dataIsEqual != true {
-					fmt.Printf("Backup-volume and Restore-volume Data are not equal, retry %d\n", i)
-					fmt.Printf("volume-Data from the response after restore\n %s\n", volData)
-					time.Sleep(10 * time.Second)
-				}
-			}
-			if dataIsEqual != true {
-				return errors.New("Backup and Restore Data are not the same")
-			}
-
-		} else if errors.Is(err, os.ErrNotExist) {
-			fmt.Printf("Writing data to volumeFile (volume-data.txt): \n %s\n", volData)
-			err := os.WriteFile(volumeFile, volData, 0644)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
 	return nil
-}
-
-func getResponseData(appApi string) ([]byte, error) {
-	resp, err := http.Get(appApi)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 { // # TODO: NEED TO FIND A BETTER WAY TO DEBUG RESPONSE
-		var retrySchedule = []time.Duration{
-			15 * time.Second,
-			1 * time.Minute,
-			2 * time.Minute,
-		}
-		for _, backoff := range retrySchedule {
-			resp, err = http.Get(appApi)
-			if resp.StatusCode != 200 {
-				log.Printf("Request error: %+v\n", err)
-				log.Printf("Retrying in %v\n", backoff)
-				time.Sleep(backoff)
-			}
-		}
-	}
-	return ioutil.ReadAll(resp.Body)
-
 }
