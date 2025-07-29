@@ -1,35 +1,64 @@
 package e2e_test
 
 import (
-	"errors"
 	"flag"
 	"log"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
-	. "github.com/openshift/oadp-operator/tests/e2e/lib"
-	"github.com/openshift/oadp-operator/tests/e2e/utils"
+	"github.com/onsi/ginkgo/v2"
+	"github.com/onsi/gomega"
+	"k8s.io/apimachinery/pkg/util/uuid"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/config"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+
+	"github.com/openshift/oadp-operator/tests/e2e/lib"
 )
 
-// Common vars obtained from flags passed in ginkgo.
-var bslCredFile, namespace, credSecretRef, instanceName, provider, vslCredFile, settings, artifact_dir, oc_cli, stream string
-var timeoutMultiplier time.Duration
+var (
+	// Common vars obtained from flags passed in ginkgo.
+	bslCredFile, namespace, instanceName, provider, vslCredFile, settings, artifact_dir string
+	flakeAttempts                                                                       int64
+
+	kubernetesClientForSuiteRun *kubernetes.Clientset
+	runTimeClientForSuiteRun    client.Client
+	dynamicClientForSuiteRun    dynamic.Interface
+
+	dpaCR                           *lib.DpaCustomResource
+	bslSecretName                   string
+	bslSecretNameWithCarriageReturn string
+	vslSecretName                   string
+
+	kubeConfig          *rest.Config
+	knownFlake          bool
+	accumulatedTestLogs []string
+
+	kvmEmulation   bool
+	useUpstreamHco bool
+	skipMustGather bool
+)
 
 func init() {
+	// TODO better descriptions to flags
 	flag.StringVar(&bslCredFile, "credentials", "", "Credentials path for BackupStorageLocation")
+	// TODO: change flag in makefile to --vsl-credentials
+	flag.StringVar(&vslCredFile, "ci_cred_file", bslCredFile, "Credentials path for for VolumeSnapshotLocation, this credential would have access to cluster volume snapshots (for CI this is not OADP owned credential)")
 	flag.StringVar(&namespace, "velero_namespace", "velero", "Velero Namespace")
 	flag.StringVar(&settings, "settings", "./templates/default_settings.json", "Settings of the velero instance")
 	flag.StringVar(&instanceName, "velero_instance_name", "example-velero", "Velero Instance Name")
-	flag.StringVar(&credSecretRef, "creds_secret_ref", "cloud-credentials", "Credential secret ref (name) for volume storage location")
 	flag.StringVar(&provider, "provider", "aws", "Cloud provider")
-	// TODO: change flag in makefile to --vsl-credentials
-	flag.StringVar(&vslCredFile, "ci_cred_file", bslCredFile, "Credentials path for for VolumeSnapshotLocation, this credential would have access to cluster volume snapshots (for CI this is not OADP owned credential)")
 	flag.StringVar(&artifact_dir, "artifact_dir", "/tmp", "Directory for storing must gather")
-	flag.StringVar(&oc_cli, "oc_cli", "oc", "OC CLI Client")
-	flag.StringVar(&stream, "stream", "up", "[up, down] upstream or downstream")
+	flag.Int64Var(&flakeAttempts, "flakeAttempts", 3, "Customize the number of flake retries (3)")
+	flag.BoolVar(&kvmEmulation, "kvm_emulation", true, "Enable or disable KVM emulation for virtualization testing")
+	flag.BoolVar(&useUpstreamHco, "hco_upstream", false, "Force use of upstream virtualization operator")
+	flag.BoolVar(&skipMustGather, "skipMustGather", false, "avoid errors with local execution and cluster architecture")
 
 	// helps with launching debug sessions from IDE
 	if os.Getenv("E2E_USE_ENV_FLAGS") == "true" {
@@ -39,17 +68,11 @@ func init() {
 		if os.Getenv("VELERO_NAMESPACE") != "" {
 			namespace = os.Getenv("VELERO_NAMESPACE")
 		}
-		if os.Getenv("OADP_STREAM") != "" {
-			stream = os.Getenv("OADP_STREAM")
-		}
 		if os.Getenv("SETTINGS") != "" {
 			settings = os.Getenv("SETTINGS")
 		}
 		if os.Getenv("VELERO_INSTANCE_NAME") != "" {
 			instanceName = os.Getenv("VELERO_INSTANCE_NAME")
-		}
-		if os.Getenv("CREDS_SECRET_REF") != "" {
-			credSecretRef = os.Getenv("CREDS_SECRET_REF")
 		}
 		if os.Getenv("PROVIDER") != "" {
 			provider = os.Getenv("PROVIDER")
@@ -62,81 +85,124 @@ func init() {
 		if os.Getenv("ARTIFACT_DIR") != "" {
 			artifact_dir = os.Getenv("ARTIFACT_DIR")
 		}
-		if os.Getenv("OC_CLI") != "" {
-			oc_cli = os.Getenv("OC_CLI")
+		if envValue := os.Getenv("FLAKE_ATTEMPTS"); envValue != "" {
+			// Parse the environment variable as int64
+			parsedValue, err := strconv.ParseInt(envValue, 10, 64)
+			if err != nil {
+				log.Println("Error parsing FLAKE_ATTEMPTS, default flake number will be used:", err)
+			} else {
+				flakeAttempts = parsedValue
+			}
+		}
+		if envValue := os.Getenv("KVM_EMULATION"); envValue != "" {
+			if parsedValue, err := strconv.ParseBool(envValue); err == nil {
+				kvmEmulation = parsedValue
+			} else {
+				log.Println("Error parsing KVM_EMULATION, it will be enabled by default: ", err)
+			}
+		}
+		if envValue := os.Getenv("HCO_UPSTREAM"); envValue != "" {
+			if parsedValue, err := strconv.ParseBool(envValue); err == nil {
+				useUpstreamHco = parsedValue
+			} else {
+				log.Println("Error parsing HCO_UPSTREAM, it will be disabled by default: ", err)
+			}
+		}
+		if envValue := os.Getenv("SKIP_MUST_GATHER"); envValue != "" {
+			if parsedValue, err := strconv.ParseBool(envValue); err == nil {
+				skipMustGather = parsedValue
+			} else {
+				log.Println("Error parsing SKIP_MUST_GATHER, must-gather will be enabled by default: ", err)
+			}
 		}
 	}
 
-	timeoutMultiplierInput := flag.Int64("timeout_multiplier", 1, "Customize timeout multiplier from default (1)")
-	timeoutMultiplier = 1
-	if timeoutMultiplierInput != nil && *timeoutMultiplierInput >= 1 {
-		timeoutMultiplier = time.Duration(*timeoutMultiplierInput)
-	}
 }
 
 func TestOADPE2E(t *testing.T) {
 	flag.Parse()
-	errString := LoadDpaSettingsFromJson(settings)
-	if errString != "" {
-		t.Fatalf(errString)
+
+	var err error
+	kubeConfig = config.GetConfigOrDie()
+	kubeConfig.QPS = 50
+	kubeConfig.Burst = 100
+
+	gomega.RegisterFailHandler(ginkgo.Fail)
+
+	kubernetesClientForSuiteRun, err = kubernetes.NewForConfig(kubeConfig)
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+
+	runTimeClientForSuiteRun, err = client.New(kubeConfig, client.Options{Scheme: lib.Scheme})
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+
+	dynamicClientForSuiteRun, err = dynamic.NewForConfig(kubeConfig)
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+
+	err = lib.CreateNamespace(kubernetesClientForSuiteRun, namespace)
+	gomega.Expect(err).To(gomega.BeNil())
+	gomega.Expect(lib.DoesNamespaceExist(kubernetesClientForSuiteRun, namespace)).Should(gomega.BeTrue())
+
+	dpa, err := lib.LoadDpaSettingsFromJson(settings)
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+
+	bslSecretName = "bsl-cloud-credentials-" + provider
+	bslSecretNameWithCarriageReturn = "bsl-cloud-credentials-" + provider + "-with-carriage-return"
+	vslSecretName = "vsl-cloud-credentials-" + provider
+
+	veleroPrefix := "velero-e2e-" + string(uuid.NewUUID())
+
+	dpaCR = &lib.DpaCustomResource{
+		Name:                 "ts-" + instanceName,
+		Namespace:            namespace,
+		Client:               runTimeClientForSuiteRun,
+		VSLSecretName:        vslSecretName,
+		BSLSecretName:        bslSecretName,
+		BSLConfig:            dpa.DeepCopy().Spec.BackupLocations[0].Velero.Config,
+		BSLProvider:          dpa.DeepCopy().Spec.BackupLocations[0].Velero.Provider,
+		BSLBucket:            dpa.DeepCopy().Spec.BackupLocations[0].Velero.ObjectStorage.Bucket,
+		BSLBucketPrefix:      veleroPrefix,
+		VeleroDefaultPlugins: dpa.DeepCopy().Spec.Configuration.Velero.DefaultPlugins,
+		SnapshotLocations:    dpa.DeepCopy().Spec.SnapshotLocations,
+		UnsupportedOverrides: dpa.DeepCopy().Spec.UnsupportedOverrides,
 	}
 
-	log.Println("Using velero prefix: " + VeleroPrefix)
-	RegisterFailHandler(Fail)
-	RunSpecs(t, "OADP E2E Suite")
+	ginkgo.RunSpecs(t, "OADP E2E using velero prefix: "+veleroPrefix)
 }
 
-var dpaCR *DpaCustomResource
+var _ = ginkgo.BeforeSuite(func() {
+	// Initialize controller-runtime logger
+	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 
-var _ = BeforeSuite(func() {
-	flag.Parse()
-	errString := LoadDpaSettingsFromJson(settings)
-	if errString != "" {
-		Expect(errors.New(errString)).NotTo(HaveOccurred())
-	}
+	// TODO create logger (hh:mm:ss message) to be used by all functions
+	log.Printf("Creating Secrets")
+	bslCredFileData, err := lib.ReadFile(bslCredFile)
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	err = lib.CreateCredentialsSecret(kubernetesClientForSuiteRun, bslCredFileData, namespace, bslSecretName)
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	err = lib.CreateCredentialsSecret(
+		kubernetesClientForSuiteRun,
+		lib.ReplaceSecretDataNewLineWithCarriageReturn(bslCredFileData),
+		namespace, bslSecretNameWithCarriageReturn,
+	)
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
-	dpaCR = &DpaCustomResource{
-		Namespace: namespace,
-		Provider:  provider,
-	}
-	dpaCR.CustomResource = Dpa
-	testSuiteInstanceName := "ts-" + instanceName
-	dpaCR.Name = testSuiteInstanceName
-
-	bslCredFileData, err := utils.ReadFile(bslCredFile)
-	Expect(err).NotTo(HaveOccurred())
-	err = CreateCredentialsSecret(bslCredFileData, namespace, "bsl-cloud-credentials-"+provider)
-	Expect(err).NotTo(HaveOccurred())
-	err = CreateCredentialsSecret(utils.ReplaceSecretDataNewLineWithCarriageReturn(bslCredFileData), namespace, "bsl-cloud-credentials-"+provider+"-with-carriage-return")
-	Expect(err).NotTo(HaveOccurred())
-
-	vslCredFileData, err := utils.ReadFile(vslCredFile)
-	Expect(err).NotTo(HaveOccurred())
-	err = CreateCredentialsSecret(vslCredFileData, namespace, credSecretRef)
-	Expect(err).NotTo(HaveOccurred())
-	dpaCR.SetClient()
-	Expect(DoesNamespaceExist(namespace)).Should(BeTrue())
+	vslCredFileData, err := lib.ReadFile(vslCredFile)
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	err = lib.CreateCredentialsSecret(kubernetesClientForSuiteRun, vslCredFileData, namespace, vslSecretName)
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
 })
 
-var _ = ReportAfterEach(func(report SpecReport) {
-	if report.Failed() {
-		log.Printf("Running must gather for failed test - " + report.LeafNodeText)
-		err := RunMustGather(oc_cli, artifact_dir+"/must-gather-"+report.LeafNodeText)
-		if err != nil {
-			log.Printf("Failed to run must gather: " + err.Error())
-		}
-	}
-})
+var _ = ginkgo.AfterSuite(func() {
+	log.Printf("Deleting Secrets")
+	err := lib.DeleteSecret(kubernetesClientForSuiteRun, namespace, vslSecretName)
+	gomega.Expect(err).ToNot(gomega.HaveOccurred())
+	err = lib.DeleteSecret(kubernetesClientForSuiteRun, namespace, bslSecretName)
+	gomega.Expect(err).ToNot(gomega.HaveOccurred())
+	err = lib.DeleteSecret(kubernetesClientForSuiteRun, namespace, bslSecretNameWithCarriageReturn)
+	gomega.Expect(err).ToNot(gomega.HaveOccurred())
 
-var _ = AfterSuite(func() {
-	log.Printf("Deleting Velero CR")
-	err := DeleteSecret(namespace, credSecretRef)
-	Expect(err).ToNot(HaveOccurred())
-	err = DeleteSecret(namespace, "bsl-cloud-credentials-"+provider)
-	Expect(err).ToNot(HaveOccurred())
-	err = DeleteSecret(namespace, "bsl-cloud-credentials-"+provider+"-with-carriage-return")
-	Expect(err).ToNot(HaveOccurred())
+	log.Printf("Deleting DPA")
 	err = dpaCR.Delete()
-	Expect(err).ToNot(HaveOccurred())
-	Eventually(dpaCR.IsDeleted(), timeoutMultiplier*time.Minute*2, time.Second*5).Should(BeTrue())
+	gomega.Expect(err).ToNot(gomega.HaveOccurred())
+	gomega.Eventually(dpaCR.IsDeleted(), time.Minute*2, time.Second*5).Should(gomega.BeTrue())
 })

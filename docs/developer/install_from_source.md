@@ -17,11 +17,20 @@ cd oadp-operator
 
 ### Installing the Operator
 
+> Note: If on macos, first ensure gsed is installed:
+> 
+> https://formulae.brew.sh/formula/gnu-sed
+
 To install CRDs and deploy the OADP operator to the `openshift-adp`
  namespace, run:
 
 ```
 $ make deploy-olm
+```
+
+After testing, uninstall CRDs and undeploy the OADP operator from `openshift-adp` namespace, running
+```
+$ make undeploy-olm
 ```
 
 ### Installing Velero + Restic

@@ -2,14 +2,17 @@ package bucket
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 
-	"github.com/openshift/oadp-operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/openshift/oadp-operator/api/v1alpha1"
+	"github.com/openshift/oadp-operator/pkg/credentials/stsflow"
 )
 
 var (
@@ -55,6 +58,28 @@ func getCredentialFromCloudStorageSecret(a client.Client, cloudStorage v1alpha1.
 			return "", err
 		}
 
+		stsSecret, err := stsflow.STSStandardizedFlow()
+		if err != nil {
+			// Log the error for debugging purposes
+			fmt.Printf("Error in STSStandardizedFlow: %v\n", err)
+			// Optionally, return the error if it is critical
+			return "", err
+		}
+		if stsSecret != "" {
+			err := a.Get(context.TODO(), types.NamespacedName{
+				Name:      stsSecret,
+				Namespace: cloudStorage.Namespace,
+			}, secret)
+			if err != nil {
+				return "", err
+			}
+			filename, err = SharedCredentialsFileFromSecret(secret)
+			if err != nil {
+				return "", err
+			}
+			return filename, nil
+		}
+
 		cred := secret.Data[cloudStorage.Spec.CreationSecret.Key]
 		//create a tmp file based on the bucket name, if it does not exist
 		dir, err := os.MkdirTemp("", fmt.Sprintf("secret-%v-%v", cloudStorage.Namespace, cloudStorage.Name))
@@ -72,4 +97,20 @@ func getCredentialFromCloudStorageSecret(a client.Client, cloudStorage v1alpha1.
 	}
 
 	return filename, nil
+}
+
+func SharedCredentialsFileFromSecret(secret *corev1.Secret) (string, error) {
+	if len(secret.Data["credentials"]) == 0 {
+		return "", errors.New("invalid secret for aws credentials")
+	}
+
+	f, err := os.CreateTemp("", "aws-shared-credentials")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if _, err := f.Write(secret.Data["credentials"]); err != nil {
+		return "", err
+	}
+	return f.Name(), nil
 }

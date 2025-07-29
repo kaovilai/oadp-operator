@@ -15,8 +15,8 @@ limitations under the License.
 */
 
 // Package v1alpha1 contains API Schema definitions for the oadp v1alpha1 API group
-//+kubebuilder:object:generate=true
-//+groupName=oadp.openshift.io
+// +kubebuilder:object:generate=true
+// +groupName=oadp.openshift.io
 package v1alpha1
 
 import (
@@ -27,8 +27,6 @@ import (
 var (
 	// GroupVersion is group version used to register these objects
 	GroupVersion = schema.GroupVersion{Group: "oadp.openshift.io", Version: "v1alpha1"}
-
-	Kind = "DataProtectionApplication"
 
 	// SchemeBuilder is used to add go types to the GroupVersionKind scheme
 	SchemeBuilder = &scheme.Builder{GroupVersion: GroupVersion}

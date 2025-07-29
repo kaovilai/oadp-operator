@@ -26,7 +26,6 @@ Create `.vscode/launch.json` file with following content
                 "SETTINGS": "${workspaceRoot}/.vscode/default_settings.json",
                 "CLOUD_CREDENTIALS": "",
                 "VELERO_INSTANCE_NAME": "",
-                "CREDS_SECRET_REF": "",
                 "PROVIDER": "",
                 "CI_CRED_FILE": "",
                 "ARTIFACT_DIR": "",
@@ -56,7 +55,7 @@ You can now use Run and Debug menu to launch
 - Debug E2E Test
   - This runs the test suite in debug mode. You can add breakpoints to step through the end to end test.
   - Prerequisites:
-    - You have installed OADP Operator. To install current commit run `make deploy-olm`
+    - You have installed OADP Operator. To install current commit follow steps from  [Installing the Operator](../install_from_source.md#installing-the-operator).
 - Launch main.go
   - This runs the operator on your machine in debug mode. You can add breakpoints and step through the code.
   - You will not see OADP in Installed Operators but it will be watching for DPA resources in the namespace as if it was installed.

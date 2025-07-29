@@ -1,15 +1,20 @@
-## Append samples you want in your CSV to this file as resources ##
+## Append samples of your project ##
 resources:
-- oadp_v1alpha1_dpa.yaml
+- oadp_v1alpha1_nonadminbackupstoragelocationrequest.yaml
+- oadp_v1alpha1_nonadminbackupstoragelocation.yaml
+- oadp_v1alpha1_dataprotectionapplication.yaml
 - backupstoragelocation.yaml
 - deletebackuprequest.yaml
 - downloadrequest.yaml
 - podvolumebackup.yaml
 - podvolumerestore.yaml
-- resticrepository.yaml
 - backup.yaml
 - restore.yaml
 - schedule.yaml
 - serverstatusrequest.yaml
 - volumesnapshotlocation.yaml
+- oadp_v1alpha1_nonadminbackup.yaml
+- oadp_v1alpha1_nonadminrestore.yaml
+- oadp_v1alpha1_nonadmindownloadrequest.yaml
+- oadp_v1alpha1_dataprotectiontest.yaml
 #+kubebuilder:scaffold:manifestskustomizesamples

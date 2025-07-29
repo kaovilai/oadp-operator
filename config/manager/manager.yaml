@@ -3,7 +3,6 @@ kind: Namespace
 metadata:
   labels:
     control-plane: controller-manager
-    openshift.io/cluster-monitoring: "true"
   name: system
 ---
 apiVersion: apps/v1
@@ -23,79 +22,112 @@ spec:
       labels:
         control-plane: controller-manager
     spec:
+      # TODO(user): Uncomment the following code to configure the nodeAffinity expression
+      # according to the platforms which are supported by your solution.
+      # It is considered best practice to support multiple architectures. You can
+      # build your manager image using the makefile target docker-buildx.
+      # affinity:
+      #   nodeAffinity:
+      #     requiredDuringSchedulingIgnoredDuringExecution:
+      #       nodeSelectorTerms:
+      #         - matchExpressions:
+      #           - key: kubernetes.io/arch
+      #             operator: In
+      #             values:
+      #               - amd64
+      #               - arm64
+      #               - ppc64le
+      #               - s390x
+      #           - key: kubernetes.io/os
+      #             operator: In
+      #             values:
+      #               - linux
       securityContext:
         runAsNonRoot: true
       containers:
-      - command:
-        - /manager
-        volumeMounts:
-          - mountPath: /var/run/secrets/openshift/serviceaccount
-            name: bound-sa-token
-            readOnly: true
-        env:
-          - name: WATCH_NAMESPACE
-            valueFrom:
-              fieldRef:
-                fieldPath: metadata.namespace
-          - name: RELATED_IMAGE_VELERO
-            value: quay.io/konveyor/velero:latest
-          - name: RELATED_IMAGE_VELERO_RESTORE_HELPER
-            value: quay.io/konveyor/velero-restore-helper:latest
-          - name: RELATED_IMAGE_OPENSHIFT_VELERO_PLUGIN
-            value: quay.io/konveyor/openshift-velero-plugin:latest
-          - name: RELATED_IMAGE_VELERO_PLUGIN_FOR_AWS
-            value: quay.io/konveyor/velero-plugin-for-aws:latest
-          - name: RELATED_IMAGE_VELERO_PLUGIN_FOR_MICROSOFT_AZURE
-            value: quay.io/konveyor/velero-plugin-for-microsoft-azure:latest
-          - name: RELATED_IMAGE_VELERO_PLUGIN_FOR_GCP
-            value: quay.io/konveyor/velero-plugin-for-gcp:latest
-          - name: RELATED_IMAGE_VELERO_PLUGIN_FOR_CSI
-            value: quay.io/konveyor/velero-plugin-for-csi:latest
-          - name: RELATED_IMAGE_VELERO_PLUGIN_FOR_VSM
-            value: quay.io/konveyor/velero-plugin-for-vsm:latest
-          - name: RELATED_IMAGE_VOLUME_SNAPSHOT_MOVER
-            value: quay.io/konveyor/volume-snapshot-mover:latest
-          - name: RELATED_IMAGE_KUBEVIRT_VELERO_PLUGIN
-            value: quay.io/konveyor/kubevirt-velero-plugin:v0.2.0
-        args:
-        - --leader-elect
-        image: controller:latest
-        imagePullPolicy: Always
-        name: manager
-        securityContext:
-          allowPrivilegeEscalation: false
-        startupProbe:
-          httpGet:
-            path: /healthz
-            port: 8081
-          failureThreshold: 12
-          periodSeconds: 10
-        livenessProbe:
-          httpGet:
-            path: /healthz
-            port: 8081
-          initialDelaySeconds: 15
-          periodSeconds: 20
-        readinessProbe:
-          httpGet:
-            path: /readyz
-            port: 8081
-          initialDelaySeconds: 5
-          periodSeconds: 10
-        resources:
-          limits:
-            cpu: 1000m
-            memory: 512Mi
-          requests:
-            cpu: 500m
-            memory: 128Mi
+        - command:
+            - /manager
+          volumeMounts:
+            - mountPath: /var/run/secrets/openshift/serviceaccount
+              name: bound-sa-token
+              readOnly: true
+            - mountPath: /tmp
+              name: tmp-dir
+          env:
+            - name: WATCH_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: FS_PV_HOSTPATH
+              value: ""
+            - name: PLUGINS_HOSTPATH
+              value: ""
+            - name: RELATED_IMAGE_VELERO
+              value: quay.io/konveyor/velero:latest
+            - name: RELATED_IMAGE_OPENSHIFT_VELERO_PLUGIN
+              value: quay.io/konveyor/openshift-velero-plugin:latest
+            - name: RELATED_IMAGE_VELERO_PLUGIN_FOR_AWS
+              value: quay.io/konveyor/velero-plugin-for-aws:latest
+            - name: RELATED_IMAGE_VELERO_PLUGIN_FOR_LEGACY_AWS
+              value: quay.io/konveyor/velero-plugin-for-legacy-aws:latest
+            - name: RELATED_IMAGE_VELERO_PLUGIN_FOR_MICROSOFT_AZURE
+              value: quay.io/konveyor/velero-plugin-for-microsoft-azure:latest
+            - name: RELATED_IMAGE_VELERO_PLUGIN_FOR_GCP
+              value: quay.io/konveyor/velero-plugin-for-gcp:latest
+            - name: RELATED_IMAGE_KUBEVIRT_VELERO_PLUGIN
+              value: quay.io/konveyor/kubevirt-velero-plugin:v0.7.0
+            - name: RELATED_IMAGE_HYPERSHIFT_VELERO_PLUGIN
+              value: quay.io/redhat-user-workloads/ocp-art-tenant/oadp-hypershift-oadp-plugin-main:main
+            - name: RELATED_IMAGE_MUSTGATHER
+              value: registry.redhat.io/oadp/oadp-mustgather-rhel8:v1.2
+            - name: RELATED_IMAGE_NON_ADMIN_CONTROLLER
+              value: quay.io/konveyor/oadp-non-admin:latest
+          args:
+            - --leader-elect
+          image: controller:latest
+          imagePullPolicy: Always
+          name: manager
+          terminationMessagePolicy: FallbackToLogsOnError
+          securityContext:
+            capabilities:
+              drop:
+                - ALL
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            failureThreshold: 12
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+            requests:
+              cpu: 500m
+              memory: 128Mi
       serviceAccountName: controller-manager
       volumes:
-      - name: bound-sa-token
-        projected:
-          sources:
-          - serviceAccountToken:
-              path: token
-              expirationSeconds: 3600
-              audience: openshift
+        - name: bound-sa-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+                  audience: openshift
+        - name: tmp-dir
+          emptyDir: {}
       terminationGracePeriodSeconds: 10
