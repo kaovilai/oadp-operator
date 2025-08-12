@@ -67,6 +67,8 @@ type CloudStorageStatus struct {
 	LastSynced *metav1.Time `json:"lastSyncTimestamp,omitempty"`
 	// Conditions represent the latest available observations of the CloudStorage's state.
 	// +operator-sdk:csv:customresourcedefinitions:type=status
+	// +listType=map
+	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
