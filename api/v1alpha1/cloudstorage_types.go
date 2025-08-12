@@ -60,10 +60,29 @@ type CloudStorageStatus struct {
 	// Name is the name requested for the bucket (aws, gcp) or container (azure)
 	// +operator-sdk:csv:customresourcedefinitions:type=status
 	Name string `json:"name"`
-	// LastSyncTimestamp is the last time the contents of the CloudStorage was synced
+	// LastSyncTimestamp represents the last time the CloudStorage resource was successfully reconciled.
+	// This timestamp is updated when the controller verifies the bucket/container exists in the cloud provider
+	// or successfully creates it. The field is set for all supported providers (AWS, Azure, GCP).
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="LastSyncTimestamp"
 	LastSynced *metav1.Time `json:"lastSyncTimestamp,omitempty"`
+	// Conditions represent the latest available observations of the CloudStorage's state.
+	// +operator-sdk:csv:customresourcedefinitions:type=status
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
+
+// CloudStorage Conditions
+const (
+	// ConditionCloudStorageReconciled indicates whether the CloudStorage resource has been successfully reconciled
+	ConditionCloudStorageReconciled = "Reconciled"
+	// CloudStorageReconciledReasonComplete indicates the CloudStorage reconciliation completed successfully
+	CloudStorageReconciledReasonComplete = "Complete"
+	// CloudStorageReconciledReasonError indicates the CloudStorage reconciliation failed with an error
+	CloudStorageReconciledReasonError = "Error"
+	// CloudStorageReconciledReasonValidationFailed indicates the CloudStorage validation failed
+	CloudStorageReconciledReasonValidationFailed = "ValidationFailed"
+	// CloudStorageReconcileCompleteMessage indicates the CloudStorage reconciliation is complete
+	CloudStorageReconcileCompleteMessage = "CloudStorage reconcile complete"
+)
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status

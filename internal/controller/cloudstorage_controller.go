@@ -20,11 +20,13 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -71,6 +73,24 @@ func (b CloudStorageReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err := b.Client.Get(ctx, req.NamespacedName, &bucket); err != nil {
 		logger.Error(err, "unable to fetch bucket CR")
 		return result, nil
+	}
+
+	// Validate CloudStorage configuration
+	if err := b.ValidateCloudStorage(&bucket); err != nil {
+		logger.Error(err, "CloudStorage validation failed")
+		apimeta.SetStatusCondition(&bucket.Status.Conditions,
+			metav1.Condition{
+				Type:    oadpv1alpha1.ConditionCloudStorageReconciled,
+				Status:  metav1.ConditionFalse,
+				Reason:  oadpv1alpha1.CloudStorageReconciledReasonValidationFailed,
+				Message: fmt.Sprintf("Validation failed: %v", err),
+			},
+		)
+		b.EventRecorder.Event(&bucket, corev1.EventTypeWarning, "ValidationFailed", fmt.Sprintf("CloudStorage validation failed: %v", err))
+		if err := b.Client.Status().Update(ctx, &bucket); err != nil {
+			logger.Error(err, "Failed to update CloudStorage status")
+		}
+		return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
 	}
 
 	// Add finalizer if none exists and object is not being deleted.
@@ -142,11 +162,33 @@ func (b CloudStorageReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		if !created {
 			logger.Info("unable to create object bucket")
 			b.EventRecorder.Event(&bucket, corev1.EventTypeWarning, "BucketNotCreated", fmt.Sprintf("unable to create bucket: %v", err))
+			apimeta.SetStatusCondition(&bucket.Status.Conditions,
+				metav1.Condition{
+					Type:    oadpv1alpha1.ConditionCloudStorageReconciled,
+					Status:  metav1.ConditionFalse,
+					Reason:  oadpv1alpha1.CloudStorageReconciledReasonError,
+					Message: fmt.Sprintf("Unable to create bucket: %v", err),
+				},
+			)
+			if statusErr := b.Client.Status().Update(ctx, &bucket); statusErr != nil {
+				logger.Error(statusErr, "Failed to update CloudStorage status after bucket creation failure")
+			}
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
 		if err != nil {
 			//TODO: LOG/EVENT THE MESSAGE
 			logger.Error(err, "Error while creating event")
+			apimeta.SetStatusCondition(&bucket.Status.Conditions,
+				metav1.Condition{
+					Type:    oadpv1alpha1.ConditionCloudStorageReconciled,
+					Status:  metav1.ConditionFalse,
+					Reason:  oadpv1alpha1.CloudStorageReconciledReasonError,
+					Message: fmt.Sprintf("Error creating bucket: %v", err),
+				},
+			)
+			if statusErr := b.Client.Status().Update(ctx, &bucket); statusErr != nil {
+				logger.Error(statusErr, "Failed to update CloudStorage status after error")
+			}
 			return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
 		}
 		b.EventRecorder.Event(&bucket, corev1.EventTypeNormal, "BucketCreated", fmt.Sprintf("bucket %v has been created", bucket.Spec.Name))
@@ -155,14 +197,38 @@ func (b CloudStorageReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		// Bucket may be created but something else went wrong.
 		logger.Error(err, "unable to determine if bucket exists.")
 		b.EventRecorder.Event(&bucket, corev1.EventTypeWarning, "BucketNotFound", fmt.Sprintf("unable to find bucket: %v", err))
+		apimeta.SetStatusCondition(&bucket.Status.Conditions,
+			metav1.Condition{
+				Type:    oadpv1alpha1.ConditionCloudStorageReconciled,
+				Status:  metav1.ConditionFalse,
+				Reason:  oadpv1alpha1.CloudStorageReconciledReasonError,
+				Message: fmt.Sprintf("Unable to determine if bucket exists: %v", err),
+			},
+		)
+		if statusErr := b.Client.Status().Update(ctx, &bucket); statusErr != nil {
+			logger.Error(statusErr, "Failed to update CloudStorage status after bucket existence check failure")
+		}
 		return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
 	}
 
 	// Update status with updated value
 	bucket.Status.LastSynced = &metav1.Time{Time: time.Now()}
 	bucket.Status.Name = bucket.Spec.Name
+	
+	// Set success condition
+	apimeta.SetStatusCondition(&bucket.Status.Conditions,
+		metav1.Condition{
+			Type:    oadpv1alpha1.ConditionCloudStorageReconciled,
+			Status:  metav1.ConditionTrue,
+			Reason:  oadpv1alpha1.CloudStorageReconciledReasonComplete,
+			Message: oadpv1alpha1.CloudStorageReconcileCompleteMessage,
+		},
+	)
 
-	b.Client.Status().Update(ctx, &bucket)
+	if err := b.Client.Status().Update(ctx, &bucket); err != nil {
+		logger.Error(err, "Failed to update CloudStorage status")
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -240,3 +306,110 @@ func (b *CloudStorageReconciler) WaitForSecret(namespace, name string) (*corev1.
 
 	return &secret, nil
 }
+
+// ValidateCloudStorage validates the CloudStorage configuration based on the provider
+func (b *CloudStorageReconciler) ValidateCloudStorage(bucket *oadpv1alpha1.CloudStorage) error {
+	// Validate that a provider is specified
+	if bucket.Spec.Provider == "" {
+		return fmt.Errorf("provider must be specified")
+	}
+
+	// Validate that a bucket/container name is specified
+	if bucket.Spec.Name == "" {
+		return fmt.Errorf("bucket/container name must be specified")
+	}
+
+	// Provider-specific validation
+	switch bucket.Spec.Provider {
+	case oadpv1alpha1.AWSBucketProvider:
+		// AWS requires region
+		if bucket.Spec.Region == "" {
+			return fmt.Errorf("AWS provider requires region to be specified")
+		}
+		// Check if credentials secret exists
+		if bucket.Spec.CreationSecret.Name != "" {
+			secret := &corev1.Secret{}
+			err := b.Client.Get(context.Background(), types.NamespacedName{
+				Name:      bucket.Spec.CreationSecret.Name,
+				Namespace: bucket.Namespace,
+			}, secret)
+			if err != nil {
+				if errors.IsNotFound(err) {
+					return fmt.Errorf("AWS credentials secret %s not found in namespace %s", bucket.Spec.CreationSecret.Name, bucket.Namespace)
+				}
+				return fmt.Errorf("error fetching AWS credentials secret: %v", err)
+			}
+			// Check for required fields in secret
+			if _, hasAccessKey := secret.Data["AWS_ACCESS_KEY_ID"]; !hasAccessKey {
+				if _, hasCloudCreds := secret.Data["cloud"]; !hasCloudCreds {
+					return fmt.Errorf("AWS credentials secret must contain AWS_ACCESS_KEY_ID or cloud field")
+				}
+			}
+		}
+
+	case oadpv1alpha1.AzureBucketProvider:
+		// Azure requires storage account
+		if bucket.Spec.Name == "" {
+			return fmt.Errorf("Azure provider requires container name to be specified")
+		}
+		// Check if credentials secret exists
+		if bucket.Spec.CreationSecret.Name != "" {
+			secret := &corev1.Secret{}
+			err := b.Client.Get(context.Background(), types.NamespacedName{
+				Name:      bucket.Spec.CreationSecret.Name,
+				Namespace: bucket.Namespace,
+			}, secret)
+			if err != nil {
+				if errors.IsNotFound(err) {
+					return fmt.Errorf("Azure credentials secret %s not found in namespace %s", bucket.Spec.CreationSecret.Name, bucket.Namespace)
+				}
+				return fmt.Errorf("error fetching Azure credentials secret: %v", err)
+			}
+			// Check for required fields based on authentication method
+			hasStorageAccount := false
+			if _, ok := secret.Data["AZURE_STORAGE_ACCOUNT_NAME"]; ok {
+				hasStorageAccount = true
+			}
+			if _, ok := secret.Data["storageAccount"]; ok {
+				hasStorageAccount = true
+			}
+			if !hasStorageAccount {
+				// Check if it's in the azurekey field (STS format)
+				if azureKey, ok := secret.Data["azurekey"]; ok {
+					keyStr := string(azureKey)
+					if !strings.Contains(keyStr, "AZURE_STORAGE_ACCOUNT") {
+						return fmt.Errorf("Azure credentials must specify storage account name")
+					}
+				} else {
+					return fmt.Errorf("Azure credentials must specify storage account name")
+				}
+			}
+		}
+
+	case oadpv1alpha1.GCPBucketProvider:
+		// GCP validation
+		if bucket.Spec.CreationSecret.Name != "" {
+			secret := &corev1.Secret{}
+			err := b.Client.Get(context.Background(), types.NamespacedName{
+				Name:      bucket.Spec.CreationSecret.Name,
+				Namespace: bucket.Namespace,
+			}, secret)
+			if err != nil {
+				if errors.IsNotFound(err) {
+					return fmt.Errorf("GCP credentials secret %s not found in namespace %s", bucket.Spec.CreationSecret.Name, bucket.Namespace)
+				}
+				return fmt.Errorf("error fetching GCP credentials secret: %v", err)
+			}
+			// Check for required fields in secret
+			if _, hasCloudCreds := secret.Data["cloud"]; !hasCloudCreds {
+				return fmt.Errorf("GCP credentials secret must contain cloud field with service account JSON")
+			}
+		}
+
+	default:
+		return fmt.Errorf("unsupported provider: %s", bucket.Spec.Provider)
+	}
+
+	return nil
+}
+
