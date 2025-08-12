@@ -403,8 +403,14 @@ spec:
       kind: CloudStorage
       name: cloudstorages.oadp.openshift.io
       statusDescriptors:
-      - description: LastSyncTimestamp is the last time the contents of the CloudStorage
-          was synced
+      - description: Conditions represent the latest available observations of the
+          CloudStorage's state.
+        displayName: Conditions
+        path: conditions
+      - description: LastSyncTimestamp represents the last time the CloudStorage resource
+          was successfully reconciled. This timestamp is updated when the controller
+          verifies the bucket/container exists in the cloud provider or successfully
+          creates it. The field is set for all supported providers (AWS, Azure, GCP).
         displayName: LastSyncTimestamp
         path: lastSyncTimestamp
       - description: Name is the name requested for the bucket (aws, gcp) or container
