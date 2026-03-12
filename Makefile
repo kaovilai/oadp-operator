@@ -65,6 +65,13 @@ IMG ?= quay.io/konveyor/oadp-operator:latest
 # You can override this with environment variable (e.g., export TTL_DURATION=4h)
 TTL_DURATION ?= 1h
 
+# DEPLOY_IMAGE_PULL_POLICY defines the imagePullPolicy for the operator manager container
+# when deploying via deploy-olm. Default is IfNotPresent, which is recommended for ttl.sh
+# images since they expire after TTL_DURATION but are tagged with unique git rev hashes.
+# Using IfNotPresent allows pod restarts to succeed using cached images after TTL expiry.
+# Override with: make deploy-olm DEPLOY_IMAGE_PULL_POLICY=Always
+DEPLOY_IMAGE_PULL_POLICY ?= IfNotPresent
+
 # HC_BACKUP_RESTORE_MODE is the mode of the HostedCluster to use for HCP tests.
 HC_BACKUP_RESTORE_MODE ?= external # create, external, external-rosa
 # HC_NAME is the name of the HostedCluster to use for HCP tests when HC_BACKUP_RESTORE_MODE is
@@ -158,6 +165,7 @@ versions: check-go ## Display all variables containing 'version' in their name.
 	@printf "\033[36m%-30s\033[0m %-20s %s\n" "OPM_VERSION" "$(OPM_VERSION)" "opm"
 	@printf "\033[36m%-30s\033[0m %-20s %s\n" "PREVIOUS_CHANNEL" "$(PREVIOUS_CHANNEL)" "catalog-test-upgrade"
 	@printf "\033[36m%-30s\033[0m %-20s %s\n" "PREVIOUS_CHANNEL_GO_VERSION" "$(PREVIOUS_CHANNEL_GO_VERSION)" "catalog-test-upgrade"
+	@printf "\033[36m%-30s\033[0m %-20s %s\n" "DEPLOY_IMAGE_PULL_POLICY" "$(DEPLOY_IMAGE_PULL_POLICY)" "deploy-olm"
 	@printf "\033[36m%-30s\033[0m %-20s %s\n" "GO_TOOLCHAIN_VERSION" "$(GO_TOOLCHAIN_VERSION)" "(informational only)"
 	$(call CHECK_TOOL_VERSION,Operator-SDK,$(OPERATOR_SDK),$(OPERATOR_SDK) version 2>/dev/null | grep 'operator-sdk version' | cut -d'"' -f2,$(OPERATOR_SDK_VERSION),operator-sdk,OPERATOR_SDK_LOCAL)
 	$(call CHECK_TOOL_VERSION,Controller-Gen,$(CONTROLLER_GEN),$(CONTROLLER_GEN) --version 2>/dev/null | grep 'Version:' | cut -d' ' -f2,$(CONTROLLER_TOOLS_VERSION),controller-gen,CONTROLLER_GEN_LOCAL)
@@ -563,6 +571,7 @@ deploy-olm: undeploy-olm ## Build current branch operator image, bundle image, p
 	@echo "DEPLOY_TMP: $(DEPLOY_TMP)"
 	# build and push operator, bundle, and catalog images
 	cp -r . $(DEPLOY_TMP) && cd $(DEPLOY_TMP) && \
+	$(SED) -i 's/imagePullPolicy: Always/imagePullPolicy: $(DEPLOY_IMAGE_PULL_POLICY)/' config/manager/manager.yaml && \
 	IMG=$(THIS_OPERATOR_IMAGE) BUNDLE_IMG=$(THIS_BUNDLE_IMAGE) BUNDLE_IMGS=$(THIS_BUNDLE_IMAGE) CATALOG_IMG=$(THIS_CATALOG_IMAGE) \
 		make docker-build docker-push bundle bundle-build bundle-push catalog-build catalog-push; \
 	chmod -R 777 $(DEPLOY_TMP) && rm -rf $(DEPLOY_TMP)
