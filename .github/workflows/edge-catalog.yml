@@ -8,13 +8,7 @@ on:
   schedule:
   - cron: '30 1-22/3 * * *'
   - cron: '0 0-21/3 * * *'
-  workflow_dispatch:
-    inputs:
-      branch:
-        default: oadp-dev
-        description: The branch to build catalog for
-        type: string
-        required: true
+  workflow_dispatch: # Manual trigger builds all channels
       
   watch:
     types: [started]
@@ -26,9 +20,6 @@ env:
 jobs:
   publish-new-edge-catalog:
     runs-on: ubuntu-latest
-    # For workflow_dispatch, only run the job if the matrix.branch matches the input branch
-    # For push/schedule, run all matrix jobs
-    if: ${{ (github.event_name == 'push' || github.event_name == 'schedule') || (github.event_name == 'workflow_dispatch' && (github.event.inputs.branch == '' || github.event.inputs.branch == matrix.branch)) }}
     permissions:
       contents: read
       packages: write
@@ -57,7 +48,6 @@ jobs:
           channel: stable-1.0
     env:
       EVENT_NAME: ${{ github.event_name }}
-      WORKFLOW_DISPATCH_INPUT_BRANCH: ${{ github.event.inputs.branch }}
       UPSTREAM_BRANCH: ${{ matrix.branch }}
       CHANNEL: ${{ matrix.channel }}
     steps:
@@ -76,12 +66,6 @@ jobs:
       # Ignore the failure of a step and avoid terminating the job.
       continue-on-error: true
     - uses: actions/checkout@v4
-      if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
-    - name: checkout target branch
-      uses: actions/checkout@v4
-      with:
-        ref: ${{ github.event.inputs.branch }}
-      if: ${{ github.event_name != 'push' && github.event_name != 'schedule'}}
     - name: Get upstream/${{ matrix.branch }}
       run: |
         git remote -vv
@@ -96,14 +80,6 @@ jobs:
         cat appendMakefile >> Makefile
         echo "upstream/${{ matrix.branch }}" > /tmp/rev-parse-head
         echo "${{ matrix.channel }}" > /tmp/tag
-      if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
-    - name: appendMakefile to target branch and appendMakefile
-      run: |
-        curl https://raw.githubusercontent.com/kaovilai/oadp-operator/edge/Tiger_passant_guardant.svg > Tiger_passant_guardant.svg
-        curl https://raw.githubusercontent.com/kaovilai/oadp-operator/edge/appendMakefile >> Makefile
-        echo "HEAD" > /tmp/rev-parse-head
-        echo "${{ github.event.inputs.branch }}" > /tmp/tag
-      if: ${{ github.event_name != 'push' && github.event_name != 'schedule'}}
     - run: cat Makefile
     - name: get git ref
       id: git-ref
