@@ -5,6 +5,8 @@ on:
     paths:
       - ".github/workflows/edge-catalog.yml"
       - "appendMakefile"
+      - "appendMakefile.modern"
+      - "appendMakefile.legacy"
   schedule:
   - cron: '30 1-22/3 * * *'
   - cron: '0 0-21/3 * * *'
