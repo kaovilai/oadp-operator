@@ -318,24 +318,39 @@ jobs:
     - name: add bundle to git ref catalog build and push
       if: ${{ steps.catalog-git-ref-exist.outcome != 'success' }}
       run: |
-        CATALOG_IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.git-ref.outputs.GIT_REF }} \
-        BUNDLE_IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.git-ref.outputs.GIT_REF }} \
-        make catalog-build catalog-push
+        make catalog-build catalog-push \
+          OPM=/usr/local/bin/opm \
+          CONTAINER_TOOL=docker \
+          OPM_VERSION=v1.64.0 \
+          DEFAULT_CHANNEL=${{ matrix.channel }} \
+          VERSION=${{ steps.version-prefix.outputs.PREFIX }}.${{ steps.dateversion.outputs.YMdHM }} \
+          BUNDLE_IMGS=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.git-ref.outputs.GIT_REF }} \
+          CATALOG_IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.git-ref.outputs.GIT_REF }}
     - name: add bundle to ${{ steps.build-tag.outputs.BUILD_TAG }} existing catalog build and push
       if: ${{ steps.catalog-build-tag-exist.outcome == 'success' }}
       id: add-to-existing-catalog
       continue-on-error: true
       run: |
-        CATALOG_BASE_IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }} \
-        CATALOG_IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }} \
-        BUNDLE_IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.git-ref.outputs.GIT_REF }} \
-        make catalog-build-replaces catalog-push
+        make catalog-build-replaces catalog-push \
+          OPM=/usr/local/bin/opm \
+          CONTAINER_TOOL=docker \
+          OPM_VERSION=v1.64.0 \
+          DEFAULT_CHANNEL=${{ matrix.channel }} \
+          VERSION=${{ steps.version-prefix.outputs.PREFIX }}.${{ steps.dateversion.outputs.YMdHM }} \
+          BUNDLE_IMGS=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.git-ref.outputs.GIT_REF }} \
+          CATALOG_BASE_IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }} \
+          CATALOG_IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }}
     - name: if existing fail, add bundle to new ${{ steps.build-tag.outputs.BUILD_TAG }} catalog build and push
       if: ${{ steps.catalog-build-tag-exist.outcome != 'success'}}
       run: |
-        CATALOG_IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }} \
-        BUNDLE_IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.git-ref.outputs.GIT_REF }} \
-        make catalog-build-replaces catalog-push
+        make catalog-build-replaces catalog-push \
+          OPM=/usr/local/bin/opm \
+          CONTAINER_TOOL=docker \
+          OPM_VERSION=v1.64.0 \
+          DEFAULT_CHANNEL=${{ matrix.channel }} \
+          VERSION=${{ steps.version-prefix.outputs.PREFIX }}.${{ steps.dateversion.outputs.YMdHM }} \
+          BUNDLE_IMGS=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.git-ref.outputs.GIT_REF }} \
+          CATALOG_IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }}
     - name: git add
       run: git add .
     - name: git status
