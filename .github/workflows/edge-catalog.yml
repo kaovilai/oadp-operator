@@ -321,3 +321,106 @@ jobs:
       run: git status
     - name: git diff
       run: git diff upstream/${{ matrix.branch }}
+
+  combine-edge-catalog:
+    name: Create combined edge catalog with all channels
+    runs-on: ubuntu-latest
+    needs: publish-new-edge-catalog
+    if: ${{ github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+    - uses: actions/checkout@v4
+    - name: get year month date hour minutes
+      id: dateversion
+      run: echo "YMdHM=$(date -u +%Y%m%d%H%M)" >> $GITHUB_OUTPUT
+    - name: install opm
+      run: |
+        export ARCH=$(case $(uname -m) in x86_64) echo -n amd64 ;; aarch64) echo -n arm64 ;; *) echo -n $(uname -m) ;; esac)
+        export OS=$(uname | awk '{print tolower($0)}')
+        export OPM_DL_URL=https://github.com/operator-framework/operator-registry/releases/download/v1.23.0
+        curl -LO ${OPM_DL_URL}/${OS}-${ARCH}-opm
+        chmod +x ${OS}-${ARCH}-opm && sudo mv ${OS}-${ARCH}-opm /usr/local/bin/opm
+    - name: Install cosign
+      uses: sigstore/cosign-installer@v3
+      with:
+        cosign-release: 'v2.4.1'
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+      with:
+        image: tonistiigi/binfmt:latest
+        platforms: linux/amd64,linux/arm64,linux/ppc64le,linux/s390x
+    - name: Setup Docker buildx
+      uses: docker/setup-buildx-action@v3
+    - name: Log into registry ${{ env.REGISTRY }}
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    - name: Build combined catalog with all channels
+      run: |
+        rm -rf catalog.Dockerfile catalog/
+        mkdir -p catalog/oadp-operator
+
+        # Create channels list
+        CHANNELS=("dev" "stable-1.6" "stable-1.5" "stable-1.4" "stable-1.3" "stable-1.2" "stable-1.1" "stable-1.0")
+
+        # Render all bundles into the catalog
+        for CHANNEL in "${CHANNELS[@]}"; do
+          BUNDLE_IMG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${CHANNEL}"
+          echo "Rendering bundle for channel ${CHANNEL}: ${BUNDLE_IMG}"
+          opm render ${BUNDLE_IMG} -o yaml >> catalog/oadp-operator/index.yaml || {
+            echo "Warning: Failed to render bundle for ${CHANNEL}, skipping"
+            continue
+          }
+        done
+
+        # Add package definition with dev as default channel
+        cat >> catalog/oadp-operator/index.yaml <<'EOF'
+        ---
+        schema: olm.package
+        name: oadp-operator
+        defaultChannel: dev
+        EOF
+
+        # Add channel definitions - each channel has one bundle entry
+        for CHANNEL in "${CHANNELS[@]}"; do
+          BUNDLE_IMG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${CHANNEL}"
+          # Extract the bundle name (CSV name) from the bundle image
+          BUNDLE_NAME=$(opm render ${BUNDLE_IMG} -o json 2>/dev/null | jq -r 'select(.schema == "olm.bundle") | .name' | head -1)
+
+          if [ -n "$BUNDLE_NAME" ]; then
+            echo "Adding channel ${CHANNEL} with bundle ${BUNDLE_NAME}"
+            cat >> catalog/oadp-operator/index.yaml <<EOF
+        ---
+        schema: olm.channel
+        name: ${CHANNEL}
+        package: oadp-operator
+        entries:
+          - name: ${BUNDLE_NAME}
+        EOF
+          else
+            echo "Warning: Could not extract bundle name for ${CHANNEL}"
+          fi
+        done
+
+        opm validate catalog/
+        opm generate dockerfile catalog/ --binary-image=quay.io/operator-framework/opm:v1.23.0
+    - name: Build and push edge catalog image
+      id: build-and-push-edge-catalog
+      uses: docker/build-push-action@v6
+      with:
+        file: catalog.Dockerfile
+        context: .
+        push: true
+        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:edge
+        platforms: linux/amd64,linux/arm64,linux/ppc64le,linux/s390x
+    - name: Sign the edge catalog image
+      env:
+        COSIGN_EXPERIMENTAL: "true"
+      run: cosign sign ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog@${{ steps.build-and-push-edge-catalog.outputs.digest }}
+    - name: Cleanup
+      run: rm -rf catalog.Dockerfile catalog/
