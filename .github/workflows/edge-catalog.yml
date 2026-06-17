@@ -108,16 +108,20 @@ jobs:
       run: echo "BUILD_TAG=$(cat /tmp/tag)" >> $GITHUB_OUTPUT
     - name: echo build-tag
       run: echo ${{ steps.build-tag.outputs.BUILD_TAG }}
-    - name: check ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.git-ref.outputs.GIT_REF }} exists
+    - name: check ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.git-ref.outputs.GIT_REF }} can be pulled
       id: catalog-git-ref-exist
       if: ${{ github.event_name != 'workflow_dispatch' }}
       continue-on-error: true
-      run: docker manifest inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.git-ref.outputs.GIT_REF }} > /dev/null
-    - name: check ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }} exists
+      env:
+        GIT_REF_TAG: ${{ steps.git-ref.outputs.GIT_REF }}
+      run: docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${GIT_REF_TAG}
+    - name: check ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }} can be pulled
       id: catalog-build-tag-exist
       if: ${{ github.event_name != 'workflow_dispatch' }}
       continue-on-error: true
-      run: docker manifest inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }} > /dev/null
+      env:
+        BUILD_TAG_VAR: ${{ steps.build-tag.outputs.BUILD_TAG }}
+      run: docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${BUILD_TAG_VAR}
     - name: get year month date hour minutes
       id: dateversion
       run: echo "YMdHM=$(date -u +%Y%m%d%H%M)" >> $GITHUB_OUTPUT
