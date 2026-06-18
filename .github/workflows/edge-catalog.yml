@@ -339,7 +339,7 @@ jobs:
           BUNDLE_IMGS=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bundle:${{ steps.git-ref.outputs.GIT_REF }} \
           CATALOG_IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.git-ref.outputs.GIT_REF }}
     - name: add bundle to ${{ steps.build-tag.outputs.BUILD_TAG }} existing catalog build and push
-      if: ${{ steps.catalog-build-tag-exist.outcome == 'success' }}
+      if: ${{ steps.catalog-git-ref-exist.outcome != 'success' && steps.catalog-build-tag-exist.outcome == 'success' }}
       id: add-to-existing-catalog
       continue-on-error: true
       run: |
@@ -353,7 +353,7 @@ jobs:
           CATALOG_BASE_IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }} \
           CATALOG_IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-catalog:${{ steps.build-tag.outputs.BUILD_TAG }}
     - name: if existing fail, add bundle to new ${{ steps.build-tag.outputs.BUILD_TAG }} catalog build and push
-      if: ${{ steps.catalog-build-tag-exist.outcome != 'success'}}
+      if: ${{ steps.catalog-git-ref-exist.outcome != 'success' && steps.catalog-build-tag-exist.outcome != 'success'}}
       run: |
         make catalog-build-replaces catalog-push \
           OPM=/usr/local/bin/opm \
