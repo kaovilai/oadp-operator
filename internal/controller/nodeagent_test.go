@@ -525,6 +525,8 @@ func createTestBuiltNodeAgentDaemonSet(options TestBuiltNodeAgentDaemonSetOption
 	if options.env != nil {
 		testBuiltNodeAgentDaemonSet.Spec.Template.Spec.Containers[0].Env = append(testBuiltNodeAgentDaemonSet.Spec.Template.Spec.Containers[0].Env, options.env...)
 	}
+	// HOME defaults to the home-velero emptyDir after user-provided env.
+	testBuiltNodeAgentDaemonSet.Spec.Template.Spec.Containers[0].Env = common.AppendUniqueEnvVars(testBuiltNodeAgentDaemonSet.Spec.Template.Spec.Containers[0].Env, []corev1.EnvVar{{Name: "HOME", Value: "/home/velero"}})
 
 	if options.envFrom != nil {
 		testBuiltNodeAgentDaemonSet.Spec.Template.Spec.Containers[0].EnvFrom = append(testBuiltNodeAgentDaemonSet.Spec.Template.Spec.Containers[0].EnvFrom, options.envFrom...)
@@ -642,6 +644,32 @@ func TestDPAReconciler_buildNodeAgentDaemonset(t *testing.T) {
 			nodeAgentDaemonSet: testNodeAgentDaemonSet.DeepCopy(),
 			wantNodeAgentDaemonSet: createTestBuiltNodeAgentDaemonSet(TestBuiltNodeAgentDaemonSetOptions{
 				env: []corev1.EnvVar{{Name: "TEST_ENV", Value: "TEST_VALUE"}},
+			}),
+		},
+		{
+			name: "valid DPA CR with PodConfig HOME Env, NodeAgent DaemonSet keeps user HOME instead of default",
+			dpa: createTestDpaWith(
+				nil,
+				oadpv1alpha1.DataProtectionApplicationSpec{
+					Configuration: &oadpv1alpha1.ApplicationConfig{
+						Velero: &oadpv1alpha1.VeleroConfig{},
+						NodeAgent: &oadpv1alpha1.NodeAgentConfig{
+							NodeAgentCommonFields: oadpv1alpha1.NodeAgentCommonFields{
+								PodConfig: &oadpv1alpha1.PodConfig{
+									Env: []corev1.EnvVar{
+										{Name: "HOME", Value: "/custom-home"},
+									},
+								},
+							},
+							UploaderType: "kopia",
+						},
+					},
+				},
+			),
+			clientObjects:      []client.Object{testGenericInfrastructure},
+			nodeAgentDaemonSet: testNodeAgentDaemonSet.DeepCopy(),
+			wantNodeAgentDaemonSet: createTestBuiltNodeAgentDaemonSet(TestBuiltNodeAgentDaemonSetOptions{
+				env: []corev1.EnvVar{{Name: "HOME", Value: "/custom-home"}},
 			}),
 		},
 		{

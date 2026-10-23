@@ -99,6 +99,7 @@ var (
 			},
 		},
 		{Name: common.LDLibraryPathEnvKey, Value: "/plugins"},
+		{Name: "HOME", Value: "/home/velero"},
 		{Name: "OPENSHIFT_IMAGESTREAM_BACKUP", Value: "true"},
 	}
 
@@ -918,6 +919,33 @@ func TestDPAReconciler_buildVeleroDeployment(t *testing.T) {
 			},
 			wantVeleroDeployment: createTestBuiltVeleroDeployment(TestBuiltVeleroDeploymentOptions{
 				customLabels: map[string]string{"foo": "bar"},
+				args: []string{
+					defaultFileSystemBackupTimeout,
+					defaultRestoreResourcePriorities,
+					defaultDisableInformerCache,
+				},
+			}),
+		},
+		{
+			name: "valid DPA CR with PodConfig HOME Env, Velero Deployment keeps user HOME instead of default",
+			dpa: createTestDpaWith(
+				nil,
+				oadpv1alpha1.DataProtectionApplicationSpec{
+					Configuration: &oadpv1alpha1.ApplicationConfig{
+						Velero: &oadpv1alpha1.VeleroConfig{
+							PodConfig: &oadpv1alpha1.PodConfig{
+								Env: []corev1.EnvVar{
+									{Name: "HOME", Value: "/custom-home"},
+								},
+							},
+						},
+					},
+				},
+			),
+			veleroDeployment: testVeleroDeployment.DeepCopy(),
+			wantVeleroDeployment: createTestBuiltVeleroDeployment(TestBuiltVeleroDeploymentOptions{
+				// user HOME takes the default HOME's place
+				env: slices.Insert(slices.Delete(slices.Clone(baseEnvVars), 3, 4), 3, corev1.EnvVar{Name: "HOME", Value: "/custom-home"}),
 				args: []string{
 					defaultFileSystemBackupTimeout,
 					defaultRestoreResourcePriorities,
@@ -2702,6 +2730,7 @@ func TestDPAReconciler_buildVeleroDeployment(t *testing.T) {
 						},
 					},
 					{Name: common.LDLibraryPathEnvKey, Value: "/plugins"},
+					{Name: "HOME", Value: "/home/velero"},
 					// Note: OPENSHIFT_IMAGESTREAM_BACKUP is NOT included when BackupImages is false
 				},
 			}),
@@ -2751,6 +2780,7 @@ func TestDPAReconciler_buildVeleroDeployment(t *testing.T) {
 						},
 					},
 					{Name: common.LDLibraryPathEnvKey, Value: "/plugins"},
+					{Name: "HOME", Value: "/home/velero"},
 					{Name: "CSI_SNAPSHOT_EARLY_FREQUENT_POLLING", Value: "true"},
 				},
 			}),

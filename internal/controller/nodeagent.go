@@ -660,7 +660,7 @@ func (r *DataProtectionApplicationReconciler) customizeNodeAgentDaemonset(ds *ap
 				// Ensure /home/velero is writable
 				corev1.VolumeMount{
 					Name:      "home-velero",
-					MountPath: "/home/velero",
+					MountPath: veleroHomeDir,
 					ReadOnly:  false,
 				},
 				// Ensure /tmp is writable
@@ -678,6 +678,9 @@ func (r *DataProtectionApplicationReconciler) customizeNodeAgentDaemonset(ds *ap
 
 			// append env vars to the nodeAgent container
 			nodeAgentContainer.Env = common.AppendUniqueEnvVars(nodeAgentContainer.Env, proxy.ReadProxyVarsFromEnv())
+			// Point HOME at the writable home-velero emptyDir unless the user set it via PodConfig.
+			// Data mover pods inherit this env and volume from the node-agent pod spec.
+			nodeAgentContainer.Env = common.AppendUniqueEnvVars(nodeAgentContainer.Env, []corev1.EnvVar{{Name: "HOME", Value: veleroHomeDir}})
 
 			// Add Azure workload identity environment variables if configured
 			azureClientID := os.Getenv(stsflow.ClientIDEnvKey)

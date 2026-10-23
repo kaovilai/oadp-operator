@@ -52,6 +52,12 @@ const (
 	caBundleFileName      = "ca-bundle.pem"
 	caBundleConfigMapName = "velero-ca-bundle"
 
+	// veleroHomeDir is the writable emptyDir mounted into the velero and
+	// node-agent containers. HOME points at it so kopia's udmrepo config and
+	// other per-user files land on a writable path even when the image does not
+	// set HOME (e.g. upstream velero images) and the root filesystem is read-only.
+	veleroHomeDir = "/home/velero"
+
 	managedAnnotationKeysAnnotation = "oadp.openshift.io/managed-resource-annotation-keys"
 	managedLabelKeysAnnotation      = "oadp.openshift.io/managed-resource-label-keys"
 )
@@ -632,7 +638,7 @@ func (r *DataProtectionApplicationReconciler) customizeVeleroContainer(veleroCon
 		},
 		corev1.VolumeMount{
 			Name:      "home",
-			MountPath: "/home/velero",
+			MountPath: veleroHomeDir,
 			ReadOnly:  false,
 		},
 	)
@@ -656,6 +662,8 @@ func (r *DataProtectionApplicationReconciler) customizeVeleroContainer(veleroCon
 	}
 	// Append proxy settings to the container from environment variables
 	veleroContainer.Env = common.AppendUniqueEnvVars(veleroContainer.Env, proxy.ReadProxyVarsFromEnv())
+	// Point HOME at the writable home emptyDir unless the user set it via PodConfig.
+	veleroContainer.Env = common.AppendUniqueEnvVars(veleroContainer.Env, []corev1.EnvVar{{Name: "HOME", Value: veleroHomeDir}})
 	if dpa.BackupImages() {
 		veleroContainer.Env = common.AppendUniqueEnvVars(veleroContainer.Env, []corev1.EnvVar{{
 			Name:  "OPENSHIFT_IMAGESTREAM_BACKUP",
