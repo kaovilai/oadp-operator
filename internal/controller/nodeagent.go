@@ -478,13 +478,6 @@ func (r *DataProtectionApplicationReconciler) customizeNodeAgentDaemonset(ds *ap
 	}
 
 	ds.Spec.Template.Spec.Volumes = append(ds.Spec.Template.Spec.Volumes,
-		// append certs volume
-		corev1.Volume{
-			Name: "certs",
-			VolumeSource: corev1.VolumeSource{
-				EmptyDir: &corev1.EmptyDirVolumeSource{},
-			},
-		},
 		// append home-velero volume
 		corev1.Volume{
 			Name: "home-velero",
@@ -652,11 +645,6 @@ func (r *DataProtectionApplicationReconciler) customizeNodeAgentDaemonset(ds *ap
 			}
 
 			nodeAgentContainer.VolumeMounts = append(nodeAgentContainer.VolumeMounts,
-				// append certs volume mount
-				corev1.VolumeMount{
-					Name:      "certs",
-					MountPath: "/etc/ssl/certs",
-				},
 				// used for short-lived credentials, inert if not used
 				corev1.VolumeMount{
 					Name:      "bound-sa-token",

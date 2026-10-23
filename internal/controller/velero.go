@@ -304,12 +304,6 @@ func (r *DataProtectionApplicationReconciler) customizeVeleroDeployment(veleroDe
 
 	veleroDeployment.Spec.Template.Spec.Volumes = append(veleroDeployment.Spec.Template.Spec.Volumes,
 		corev1.Volume{
-			Name: "certs",
-			VolumeSource: corev1.VolumeSource{
-				EmptyDir: &corev1.EmptyDirVolumeSource{},
-			},
-		},
-		corev1.Volume{
 			Name: "tmp",
 			VolumeSource: corev1.VolumeSource{
 				EmptyDir: &corev1.EmptyDirVolumeSource{},
@@ -625,10 +619,6 @@ func (r *DataProtectionApplicationReconciler) customizeVeleroContainer(veleroCon
 	}
 	veleroContainer.ImagePullPolicy = imagePullPolicy
 	veleroContainer.VolumeMounts = append(veleroContainer.VolumeMounts,
-		corev1.VolumeMount{
-			Name:      "certs",
-			MountPath: "/etc/ssl/certs",
-		},
 		// used for short-lived credentials, inert if not used
 		corev1.VolumeMount{
 			Name:      "bound-sa-token",

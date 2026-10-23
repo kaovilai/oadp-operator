@@ -105,7 +105,6 @@ var (
 	baseVolumeMounts = []corev1.VolumeMount{
 		{Name: "plugins", MountPath: "/plugins", ReadOnly: true},
 		{Name: "scratch", MountPath: "/scratch"},
-		{Name: "certs", MountPath: "/etc/ssl/certs"},
 		{Name: "bound-sa-token", MountPath: "/var/run/secrets/openshift/serviceaccount", ReadOnly: true},
 		{Name: "tmp", MountPath: "/tmp"},
 		{Name: "home", MountPath: "/home/velero"},
@@ -118,10 +117,6 @@ var (
 		},
 		{
 			Name:         "scratch",
-			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
-		},
-		{
-			Name:         "certs",
 			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 		},
 		{

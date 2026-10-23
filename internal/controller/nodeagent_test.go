@@ -323,12 +323,6 @@ func createTestBuiltNodeAgentDaemonSet(options TestBuiltNodeAgentDaemonSetOption
 			},
 		},
 		corev1.Volume{
-			Name: "certs",
-			VolumeSource: corev1.VolumeSource{
-				EmptyDir: &corev1.EmptyDirVolumeSource{},
-			},
-		},
-		corev1.Volume{
 			Name: "home-velero",
 			VolumeSource: corev1.VolumeSource{
 				EmptyDir: &corev1.EmptyDirVolumeSource{},
@@ -371,10 +365,6 @@ func createTestBuiltNodeAgentDaemonSet(options TestBuiltNodeAgentDaemonSetOption
 		corev1.VolumeMount{
 			Name:      "scratch",
 			MountPath: "/scratch",
-		},
-		corev1.VolumeMount{
-			Name:      "certs",
-			MountPath: "/etc/ssl/certs",
 		},
 		corev1.VolumeMount{
 			Name:      "bound-sa-token",
