@@ -28,6 +28,17 @@ To install CRDs and deploy the OADP operator to the `openshift-adp`
 $ make deploy-olm
 ```
 
+To only build and push the operator, bundle and catalog images, for example to
+ install them later with your own CatalogSource, run:
+
+```
+$ make deploy-olm-images THIS_OPERATOR_IMAGE=<registry>/oadp-operator:<tag> THIS_BUNDLE_IMAGE=<registry>/oadp-operator-bundle:<tag> THIS_CATALOG_IMAGE=<registry>/oadp-operator-catalog:<tag>
+```
+
+The bundle's CSV points at `THIS_OPERATOR_IMAGE`. Images are built for the
+ architecture of the cluster `oc` is logged into, or `linux/amd64` when there
+ is none (override with `DOCKER_BUILD_ARGS=--platform=<os>/<arch>`).
+
 After testing, uninstall CRDs and undeploy the OADP operator from `openshift-adp` namespace, running
 ```
 $ make undeploy-olm
