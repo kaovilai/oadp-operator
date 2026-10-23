@@ -354,6 +354,9 @@ bundle: manifests kustomize operator-sdk ## Generate bundle manifests and metada
 
 .PHONY: bundle-build
 bundle-build: ## Build the bundle image.
+	# COPY keeps file modes; a restrictive umask (e.g. 077) would leave the
+	# bundle unreadable to OLM's unpack job, so make it world-readable.
+	chmod -R a+rX bundle/
 	$(CONTAINER_TOOL) build --load -f bundle.Dockerfile -t $(BUNDLE_IMG) . $(DOCKER_BUILD_ARGS)
 
 .PHONY: bundle-push
@@ -412,6 +415,8 @@ catalog-build: opm ## Build a catalog image.
 	@echo "  - name: oadp-operator.v$(VERSION)" >> catalog/oadp-operator/index.yaml
 	$(OPM) validate catalog/
 	$(OPM) generate dockerfile catalog/ --binary-image=quay.io/operator-framework/opm:$(OPM_VERSION)
+	# opm serves the catalog as a non-root user; keep it readable under a restrictive umask
+	chmod -R a+rX catalog/
 	$(CONTAINER_TOOL) build --load $(DOCKER_BUILD_ARGS) -f catalog.Dockerfile -t $(CATALOG_IMG) .
 	rm -rf catalog.Dockerfile catalog/
 
@@ -627,12 +632,12 @@ OADP_TEST_NAMESPACE ?= openshift-adp
 # Namespace to install CatalogSource (openshift-marketplace is the standard location)
 CATALOG_SOURCE_NAMESPACE ?= openshift-marketplace
 
-.PHONY: deploy-olm
-deploy-olm: THIS_OPERATOR_IMAGE?=ttl.sh/oadp-operator-$(GIT_REV):$(TTL_DURATION) # Set target specific variable
-deploy-olm: THIS_BUNDLE_IMAGE?=ttl.sh/oadp-operator-bundle-$(GIT_REV):$(TTL_DURATION) # Set target specific variable
-deploy-olm: THIS_CATALOG_IMAGE?=ttl.sh/oadp-operator-catalog-$(GIT_REV):$(TTL_DURATION) # Set target specific variable
-deploy-olm: DEPLOY_TMP:=$(shell mktemp -d)/ # Set target specific variable
-deploy-olm: undeploy-olm ## Build current branch operator image, bundle image, push and install via OLM. For more information, check docs/developer/install_from_source.md
+.PHONY: deploy-olm-images
+deploy-olm-images: THIS_OPERATOR_IMAGE?=ttl.sh/oadp-operator-$(GIT_REV):$(TTL_DURATION) # Set target specific variable
+deploy-olm-images: THIS_BUNDLE_IMAGE?=ttl.sh/oadp-operator-bundle-$(GIT_REV):$(TTL_DURATION) # Set target specific variable
+deploy-olm-images: THIS_CATALOG_IMAGE?=ttl.sh/oadp-operator-catalog-$(GIT_REV):$(TTL_DURATION) # Set target specific variable
+deploy-olm-images: DEPLOY_TMP:=$(shell mktemp -d)/ # Set target specific variable
+deploy-olm-images: ## Build and push current branch operator, bundle (CSV pointing at THIS_OPERATOR_IMAGE) and catalog images without touching a cluster.
 	@make versions
 	@echo "DEPLOY_TMP: $(DEPLOY_TMP)"
 	# build and push operator, bundle, and catalog images
@@ -640,6 +645,13 @@ deploy-olm: undeploy-olm ## Build current branch operator image, bundle image, p
 	IMG=$(THIS_OPERATOR_IMAGE) BUNDLE_IMG=$(THIS_BUNDLE_IMAGE) BUNDLE_IMGS=$(THIS_BUNDLE_IMAGE) CATALOG_IMG=$(THIS_CATALOG_IMAGE) \
 		make docker-build docker-push bundle bundle-build bundle-push catalog-build catalog-push; \
 	chmod -R 777 $(DEPLOY_TMP) && rm -rf $(DEPLOY_TMP)
+
+.PHONY: deploy-olm
+deploy-olm: THIS_OPERATOR_IMAGE?=ttl.sh/oadp-operator-$(GIT_REV):$(TTL_DURATION) # Set target specific variable
+deploy-olm: THIS_BUNDLE_IMAGE?=ttl.sh/oadp-operator-bundle-$(GIT_REV):$(TTL_DURATION) # Set target specific variable
+deploy-olm: THIS_CATALOG_IMAGE?=ttl.sh/oadp-operator-catalog-$(GIT_REV):$(TTL_DURATION) # Set target specific variable
+deploy-olm: undeploy-olm ## Build current branch operator image, bundle image, push and install via OLM. For more information, check docs/developer/install_from_source.md
+	$(MAKE) deploy-olm-images THIS_OPERATOR_IMAGE=$(THIS_OPERATOR_IMAGE) THIS_BUNDLE_IMAGE=$(THIS_BUNDLE_IMAGE) THIS_CATALOG_IMAGE=$(THIS_CATALOG_IMAGE)
 	# Create CatalogSource with restricted security context
 	@echo "Creating CatalogSource $(CATALOG_SOURCE_NAME)..."
 	@echo -e "apiVersion: operators.coreos.com/v1alpha1\nkind: CatalogSource\nmetadata:\n  name: $(CATALOG_SOURCE_NAME)\n  namespace: $(CATALOG_SOURCE_NAMESPACE)\nspec:\n  sourceType: grpc\n  image: $(THIS_CATALOG_IMAGE)\n  displayName: OADP Operator Catalog\n  publisher: OADP Team\n  grpcPodConfig:\n    securityContextConfig: restricted" | $(OC_CLI) apply -f -
