@@ -737,6 +737,25 @@ func registrySecretName(bsl velerov1.BackupStorageLocation) string {
 	return "oadp-" + bsl.Name + "-" + bsl.Spec.Provider + "-registry-secret"
 }
 
+// isRegistrySecretName reports whether name has the structure produced by
+// registrySecretName for a provider that gets a registry secret.
+func isRegistrySecretName(name string) bool {
+	bslAndProvider, ok := strings.CutPrefix(name, "oadp-")
+	if !ok {
+		return false
+	}
+	bslAndProvider, ok = strings.CutSuffix(bslAndProvider, "-registry-secret")
+	if !ok {
+		return false
+	}
+	for _, provider := range []string{AWSProvider, AzureProvider} {
+		if bslName, ok := strings.CutSuffix(bslAndProvider, "-"+provider); ok && bslName != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // deleteStaleRegistrySecrets deletes registry secrets controlled by the DPA
 // whose names are not in keep.
 func (r *DataProtectionApplicationReconciler) deleteStaleRegistrySecrets(keep map[string]bool) error {
@@ -750,8 +769,7 @@ func (r *DataProtectionApplicationReconciler) deleteStaleRegistrySecrets(keep ma
 	for i := range secretList.Items {
 		secret := &secretList.Items[i]
 		if keep[secret.Name] ||
-			!strings.HasPrefix(secret.Name, "oadp-") ||
-			!strings.HasSuffix(secret.Name, "-registry-secret") ||
+			!isRegistrySecretName(secret.Name) ||
 			!metav1.IsControlledBy(secret, r.dpa) {
 			continue
 		}

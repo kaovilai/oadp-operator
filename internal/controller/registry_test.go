@@ -991,6 +991,27 @@ func TestDPAReconciler_ReconcileRegistrySecrets(t *testing.T) {
 			wantSecrets: []string{"oadp-bsl-1-aws-registry-secret", "oadp-user-aws-registry-secret", "oadp-other-secret"},
 		},
 		{
+			name: "DPA-controlled secrets not matching the generated registry secret name are kept",
+			dpa:  newDPA(nil),
+			objects: func(dpa *oadpv1alpha1.DataProtectionApplication) []client.Object {
+				return []client.Object{
+					cloudCredentials.DeepCopy(),
+					newBSL("bsl-1", AWSProvider),
+					newRegistrySecret("oadp-registry-secret", dpa),
+					newRegistrySecret("oadp-aws-registry-secret", dpa),
+					newRegistrySecret("oadp-removed-bsl-gcp-registry-secret", dpa),
+					newRegistrySecret("oadp-removed-bsl-azure-registry-secret", dpa),
+				}
+			},
+			wantSecrets: []string{
+				"oadp-bsl-1-aws-registry-secret",
+				"oadp-registry-secret",
+				"oadp-aws-registry-secret",
+				"oadp-removed-bsl-gcp-registry-secret",
+			},
+			goneSecrets: []string{"oadp-removed-bsl-azure-registry-secret"},
+		},
+		{
 			name: "all registry secrets are deleted when backupImages is disabled",
 			dpa:  newDPA(ptr.To(false)),
 			objects: func(dpa *oadpv1alpha1.DataProtectionApplication) []client.Object {
